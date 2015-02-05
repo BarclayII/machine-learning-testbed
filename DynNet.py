@@ -40,7 +40,7 @@ def location_restore(loc, size):
     return (loc + 1) / 2 * size
 
 def bsl(loc, time):
-    return 0.5 * time
+    return 0.8 * time
 
 
 class DynNet:
@@ -244,7 +244,9 @@ class DynNet:
         ### Location network ###
         # No squashing is applied to the location network output.
         # Only a simple linear transformation is done.
-        loc_out     = TT.dot(self.W_loc_out, loc_in) + self.B_loc_out
+        # EDIT: Added a tanh non-linear squasher to restrict glimpses from moving outside the environment.
+        #       The reinforcement model steps out extremely frequently
+        loc_out     = TT.tanh(TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
 
         return loc_out.flatten(), next_candt.flatten(), core_out.flatten()
 
