@@ -248,7 +248,7 @@ class DynNet:
         #       The reinforcement model steps out extremely frequently
         loc_out     = TT.tanh(TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
 
-        return loc_out.flatten(), next_candt.flatten(), core_out.flatten()
+        return loc_out, next_candt, core_out
 
 
 
@@ -361,7 +361,8 @@ class DynNet:
 
         # Start training
         print 'TRAINING START!'
-        mean = 0
+        mean = 0.
+        prev_mean = 0.
         for gamenum in xrange(0, self.opts["training_size"]):
             # OK, here's how I intend to do it:
             # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
@@ -430,11 +431,13 @@ class DynNet:
             if self.opts["supervise_mdl"]:
                 c = learn_func(loc_in, glm_in, real_out)
                 mean = (mean * gamenum + c) / (gamenum + 1)
-                print 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean
+                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, '\x1b[37m'
             else:
                 c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
                 mean = (mean * gamenum + c) / (gamenum + 1)
-                print 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean
+                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                        '\tReward: %d' % reward[-1], '\x1b[37m'
+            prev_mean = mean
 
             if (gamenum % 100 == 0):
                 print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
