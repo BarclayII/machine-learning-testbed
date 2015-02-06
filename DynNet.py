@@ -126,8 +126,10 @@ class DynNet:
         "batch_replace" :   None,           # (NOT USED) Replace algorithm, returns index of sample to be replaced
         "additional_fc" :   False,          # Additional fully-connected layers before and after LSTM core, not sure whether it should be added.
         "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
-        "supervise_mdl" :   False,          # Supervised model in which the ball location is exposed to trainer.
-                                            # Switch to False to make environment tell whether the glimpses are on the ball only (i.e. reinforcement learning model).
+        "learningmodel" :   "reinforce",    # Learning model.
+                                            # 'supervised' -> Supervised model.
+                                            # 'reinforce' -> REINFORCE model.
+                                            # 'reinforce_sum' -> REINFORCE model with costs summed rather than averaged.
         "reinforce_bsl" :   bsl,            # Baseline function, takes output location and time, returns expectation
         "output_squash" :   identity        # Location output squasher function
         }
@@ -320,7 +322,7 @@ class DynNet:
         sym_glm_in_list = TT.matrix('glm_in_l')
         sym_candt_list = TT.matrix('candt_l')
         sym_outpt_list = TT.matrix('outpt_l')
-        if self.opts["supervise_mdl"]:
+        if self.opts["learningmodel"] == 'supervised':
             sym_real_loc_list = TT.matrix('real_loc_l')
             # I have to admit that theano.scan() function is quite obscure.
             # In a word, theano.scan() repeatedly invokes a function @fn, producing outputs.
@@ -340,9 +342,12 @@ class DynNet:
             step_scan, _ = T.scan(fn=self.step_reinforce,
                                   sequences=[sym_loc_in_list, sym_glm_in_list, sym_step_num_list, sym_chosen_loc_list, sym_reward_list],
                                   outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
-            sym_cost = step_scan[3].mean()      # Not sure whether it should be mean() or sum().
+            if self.opts["learningmodel"] == 'reinforce_sum':
+                sym_cost = step_scan[3].sum()
+            else:
+                sym_cost = step_scan[3].mean()      # Not sure whether it should be mean() or sum(), so I added both
         sym_cost.name = 'cost'
-        if self.opts["supervise_mdl"]:
+        if self.opts["learningmodel"] == 'supervised':
             cost_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list], sym_cost)
         else:
             cost_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_steps, sym_chosen_loc_list, sym_reward_list], sym_cost)
@@ -368,7 +373,7 @@ class DynNet:
         updates[sym_learn_rate] = self.opts["rate_decay_fn"](sym_learn_rate)
 
         # Create learning functions for adjusting weights.
-        if self.opts["supervise_mdl"]:
+        if self.opts["learningmodel"] == 'supervised':
             learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
                                     sym_cost,
                                     updates=updates,
@@ -429,7 +434,7 @@ class DynNet:
 
                 # Calculate informations (labels) available for determining the cost later.
                 # Meanwhile, select next location input.
-                if self.opts["supervise_mdl"]:
+                if self.opts["learningmodel"] == 'supervised':
                     # In supervised model, the next location the agent will choose is equal to the location network output.
                     # No distribution is applied.
                     loc_in.append(lo)
@@ -457,7 +462,7 @@ class DynNet:
             time -= 1
 
             # Update parameters using learning function created above.
-            if self.opts["supervise_mdl"]:
+            if self.opts["learningmodel"] == 'supervised':
                 c = learn_func(loc_in, glm_in, real_out)
                 mean = (mean * gamenum + c) / (gamenum + 1)
                 print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
@@ -485,7 +490,7 @@ class DynNet:
                     real_out_r = location_restore(real_out[t], env.size())
                     print t, '\t\t', loc_out_r, '\t', chosen_loc_r, '\t',\
                             reward[t], '\t', real_out_r, '\t', \
-                            NP.sqrt(NP.dot(real_out_r - loc_out_r, real_out_r - loc_out_r)) if self.opts["supervise_mdl"] \
+                            NP.sqrt(NP.dot(real_out_r - loc_out_r, real_out_r - loc_out_r)) if self.opts["learningmodel"] == 'supervised' \
                             else NP.max(NP.abs(real_out_r - loc_out_r)), \
-                            '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["supervise_mdl"] else \
+                            '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
                             NP.max(NP.abs(real_out_r - chosen_loc_r))
