@@ -384,6 +384,7 @@ class DynNet:
         mean = 0.
         prev_mean = 0.
         sum_rwd = 0
+        sum_step = 0
         effective_gamenum = 0
         for gamenum in xrange(0, self.opts["training_size"]):
             # OK, here's how I intend to do it:
@@ -461,21 +462,22 @@ class DynNet:
                 mean = (mean * gamenum + c) / (gamenum + 1)
                 print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                         '\tSteps: %d' % time, '\x1b[37m'
+                prev_mean = mean
             else:
                 c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
+                sum_rwd += sum(reward)
+                sum_step += time
+                mean_prob = float(sum_rwd) / sum_step
                 if sum(reward) != 0:
                     mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
                     effective_gamenum += 1
-                    print '\x1b[0;37m' if sum(reward) == 0 else ('\x1b[0;31m' if mean > prev_mean else '\x1b[0;32m'), \
-                            'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                            '\tReward: %.1f' % sum(reward), 'Steps: %d' % time, '\x1b[0;37m'
-                sum_rwd += sum(reward)
-            prev_mean = mean
+                print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
+                        'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                        '\tReward: %.1f' % sum(reward), '\tSteps: %d' % time, '\tProb: %.5f' % (sum(reward) / time), \
+                        'Mean Prob: %.5f' % mean_prob, '\x1b[0;37m'
+                prev_mean = mean_prob
 
             if (gamenum % 100 == 0):
-                if not self.opts["supervise_mdl"]:
-                    print 'Average reward: %.10f' % (sum_rwd / 100.0)
-                    sum_rwd = 0
                 print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
                 for t in range(0, time):
                     loc_out_r = location_restore(loc_out[t], env.size())
