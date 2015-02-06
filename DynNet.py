@@ -1,7 +1,8 @@
 """
-Dynamic Network, not exactly as described in DeepMind paper as it somehow
-combines Recurrent Attention Model with experience replay and other
-techniques from the Deep Q-Learning paper.
+Dynamic Network, not exactly as described in DeepMind paper.
+
+References:
+    Recurrent Models of Visual Attention, Google DeepMind, 2014.
 """
 
 from collections import OrderedDict
@@ -93,7 +94,16 @@ class DynNet:
 
 
 
-    def __init__(self, **options):
+    def __getstate__(self):
+        return (self._params, self.opts)
+
+    def __setstate(self, state):
+        self._params = state[0]
+        self.opts = state[1]
+
+
+
+    def __init__(self, params=None, **options):
         self.opts = {
         "location_dims" :   2,              # (FIXED) location dimension
         "glimpse_count" :   3,              # (FIXED) number of glimpses taken
@@ -118,7 +128,8 @@ class DynNet:
         "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
         "supervise_mdl" :   False,          # Supervised model in which the ball location is exposed to trainer.
                                             # Switch to False to make environment tell whether the glimpses are on the ball only (i.e. reinforcement learning model).
-        "reinforce_bsl" :   bsl             # Baseline function, takes output location and time, returns expectation
+        "reinforce_bsl" :   bsl,            # Baseline function, takes output location and time, returns expectation
+        "output_squash" :   identity        # Location output squasher function
         }
         self._params = OrderedDict()
         self._deltas = OrderedDict()
@@ -246,7 +257,7 @@ class DynNet:
         # Only a simple linear transformation is done.
         # EDIT: Added a tanh non-linear squasher to restrict glimpses from moving outside the environment.
         #       The reinforcement model steps out extremely frequently
-        loc_out     = TT.tanh(TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
+        loc_out     = self.opts["output_squash"](TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
 
         return loc_out, next_candt, core_out
 
@@ -269,16 +280,21 @@ class DynNet:
         """
         loc_out, next_candt, core_out = self.step_lstm(location, glimpses, prev_candt, prev_outpt)
         loc_diff = chosen_loc - loc_out
-        # Probability density function for multivariate normal distribution
-        pdf = TT.exp(-0.5 * TT.dot(loc_diff.transpose(), TT.dot(LA.matrix_inverse(self.covariance), loc_diff)))
-        pdf /= ((2 * NP.pi) * TT.sqrt(LA.det(self.covariance)))
+        # Log-probability density function for independent bivariate normal distribution, with coefficients discarded.
+        # It is essentially the distance between chosen location and mean location...
+        pdf = TT.dot(loc_diff, loc_diff)
         # REINFORCE is an acronym of "REward Increment = Nonnegative Factor * Offset Reinforcement * Characteristic Eligibility",
         # Since "Nonnegative Factor" there is learning rate here, and we can view the reward increment as a gradient ascent step of a particular cost function.
         # Moreover, the "Characteristic Eligibility" is exactly the differentiation of probability density function.
-        # Hence, we can write out that cost function as:
-        # cost = pdf * -reward
-        # and then perform gradient descent on this cost function.
-        cost = TT.log(pdf) * -reward
+        # Hence, we can write out that cost function.
+        # NOTE: The only difference between the so-called reinforcement learning method with traditional supervised method is now the granularity of cost function.
+        #       Did I miss something?
+        #       References: Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning, R. J. Williams, 1992
+        # NOTE: The baseline I choose is just the previous cumulative reward.
+        #       Perhaps it's easy to implement because the stepping function only need *current* reward instead of *cumulative* reward.
+        #       I still can't figure out how to calculate expectation of current reward.  Maybe I need another network or something for approximation...?
+        #       References: Policy Gradient Methods for Reinforcement Learning with Function Approximation, R. S. Sutton et al., NIPS 1999.
+        cost = pdf * reward
         return loc_out, next_candt, core_out, cost
 
 
@@ -315,6 +331,7 @@ class DynNet:
             step_scan, _ = T.scan(fn=self.step_supervised,
                                   sequences=[sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
                                   outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
+            sym_cost = step_scan[3].mean()
         else:
             sym_steps = TT.iscalar('steps')
             sym_step_num_list = TT.arange(sym_steps)
@@ -323,7 +340,7 @@ class DynNet:
             step_scan, _ = T.scan(fn=self.step_reinforce,
                                   sequences=[sym_loc_in_list, sym_glm_in_list, sym_step_num_list, sym_chosen_loc_list, sym_reward_list],
                                   outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
-        sym_cost = step_scan[3].mean()
+            sym_cost = step_scan[3].mean()      # Not sure whether it should be mean() or sum().
         sym_cost.name = 'cost'
         if self.opts["supervise_mdl"]:
             cost_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list], sym_cost)
@@ -345,9 +362,12 @@ class DynNet:
         for i, param in enumerate(self._params.values()):
             updates[param] = param - sym_learn_rate * sym_grads[i]
         for i, param in enumerate(self._params.values()):
+            # Currently I'm not considering adding momentum and weight decays into gradient increment.
+            # See comments below for my reason.
             updates[self._deltas[param]] = sym_learn_rate * sym_grads[i]
         updates[sym_learn_rate] = self.opts["rate_decay_fn"](sym_learn_rate)
 
+        # Create learning functions for adjusting weights.
         if self.opts["supervise_mdl"]:
             learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
                                     sym_cost,
@@ -363,6 +383,8 @@ class DynNet:
         print 'TRAINING START!'
         mean = 0.
         prev_mean = 0.
+        sum_rwd = 0
+        effective_gamenum = 0
         for gamenum in xrange(0, self.opts["training_size"]):
             # OK, here's how I intend to do it:
             # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
@@ -383,6 +405,7 @@ class DynNet:
             chosen_loc = [NP.zeros((self.opts["location_dims"],))]
             cost = [0.]
             time = 0
+            rwd = 0
 
             # Randomly choose a starting point
             loc_in.append(NP.random.uniform(-1, 1, 2))
@@ -406,20 +429,24 @@ class DynNet:
                 # Calculate informations (labels) available for determining the cost later.
                 # Meanwhile, select next location input.
                 if self.opts["supervise_mdl"]:
+                    # In supervised model, the next location the agent will choose is equal to the location network output.
+                    # No distribution is applied.
                     loc_in.append(lo)
                     chosen_loc.append(lo)
+                    # The locations stored by agent is zoomed to (-1, -1) ~ (1, 1).
                     ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
                     real_out.append(ro)
-                    rwd = 1 if env.is_tracking(lo, self.opts["glimpse_width"]) else 0
+                    rwd = (1 if env.is_tracking(location_restore(lo, env.size()), self.opts["glimpse_width"]) else 0)
                     reward.append(rwd)
                     #print '\ttime=', time
                     #print '\t\tloc_out =', loc_out[-1]
                     #print '\t\treal_out=', real_out[-1]
                 else:
+                    # In reinforcement learning model, the location picked by agent follows an independent bivariate normal distribution.
                     cl = NP.random.multivariate_normal(lo, self.covariance.get_value())
                     chosen_loc.append(cl)
                     loc_in.append(cl)
-                    rwd = reward[-1] + (1 if env.is_tracking(location_restore(cl, env.size()), self.opts["glimpse_width"]) else 0)
+                    rwd = (1 if env.is_tracking(location_restore(cl, env.size()), self.opts["glimpse_width"]) else 0)
                     reward.append(rwd)
                     ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
                     real_out.append(ro)
@@ -428,18 +455,27 @@ class DynNet:
             loc_in.pop()
             time -= 1
 
+            # Update parameters using learning function created above.
             if self.opts["supervise_mdl"]:
                 c = learn_func(loc_in, glm_in, real_out)
                 mean = (mean * gamenum + c) / (gamenum + 1)
-                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, '\x1b[37m'
+                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                        '\tSteps: %d' % time, '\x1b[37m'
             else:
                 c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
-                mean = (mean * gamenum + c) / (gamenum + 1)
-                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                        '\tReward: %d' % reward[-1], '\x1b[37m'
+                if sum(reward) != 0:
+                    mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
+                    effective_gamenum += 1
+                    print '\x1b[0;37m' if sum(reward) == 0 else ('\x1b[0;31m' if mean > prev_mean else '\x1b[0;32m'), \
+                            'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                            '\tReward: %.1f' % sum(reward), 'Steps: %d' % time, '\x1b[0;37m'
+                sum_rwd += sum(reward)
             prev_mean = mean
 
             if (gamenum % 100 == 0):
+                if not self.opts["supervise_mdl"]:
+                    print 'Average reward: %.10f' % (sum_rwd / 100.0)
+                    sum_rwd = 0
                 print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
                 for t in range(0, time):
                     loc_out_r = location_restore(loc_out[t], env.size())

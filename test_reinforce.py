@@ -7,7 +7,7 @@ import pdb
 NP.set_printoptions(linewidth=150)
 
 e = CBE()
-n = DynNet()
+n = DynNet(learning_rate=0.0005)
 
 n.train(e)
 
