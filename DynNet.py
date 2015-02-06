@@ -473,8 +473,8 @@ class DynNet:
                     effective_gamenum += 1
                 print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
                         'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                        '\tReward: %.1f' % sum(reward), '\tSteps: %d' % time, '\tProb: %.5f' % (sum(reward) / time), \
-                        'Mean Prob: %.5f' % mean_prob, '\x1b[0;37m'
+                        '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
+                        'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
                 prev_mean = mean_prob
 
             if (gamenum % 100 == 0):
