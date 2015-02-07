@@ -16,6 +16,9 @@ import numpy as NP
 
 from Glimpse import glimpse
 
+import cPickle
+import sys
+
 _LSTM_tags = ('candt', 'input', 'frget', 'outpt')
 
 T.config.exception_verbosity = 'high'
@@ -94,15 +97,6 @@ class DynNet:
 
 
 
-    def __getstate__(self):
-        return (self._params, self.opts)
-
-    def __setstate(self, state):
-        self._params = state[0]
-        self.opts = state[1]
-
-
-
     def __init__(self, params=None, **options):
         self.opts = {
         "location_dims" :   2,              # (FIXED) location dimension
@@ -131,7 +125,10 @@ class DynNet:
                                             # 'reinforce' -> REINFORCE model.
                                             # 'reinforce_sum' -> REINFORCE model with costs summed rather than averaged.
         "reinforce_bsl" :   bsl,            # Baseline function, takes output location and time, returns expectation
-        "output_squash" :   identity        # Location output squasher function
+        "output_squash" :   identity,       # Location output squasher function
+        "save_file_fmt" :   'pickle',       # Parameter save file format, currently only cPickle is supported
+        "save_filename" :   'DynNet.pickle',# Save file name
+        "load_filename" :   None            # Load file name.  The trainer loads network from this file if this option is not None.
         }
         self._params = OrderedDict()
         self._deltas = OrderedDict()
@@ -140,7 +137,7 @@ class DynNet:
         for k in options:
             if (k not in self.opts):
                 continue
-            elif (type(self.opts[k]) is not type(options[k])):
+            elif (self.opts[k] != None) and (type(self.opts[k]) is not type(options[k])):
                 raise TypeError("Type of option %s is not %s", (k, type(self.opts[k])))
             else:
                 self.opts[k] = options[k]
@@ -184,6 +181,17 @@ class DynNet:
         if self.opts["actions_count"] > 0:
             raise AttributeError("option actions_count must be 0")
             self._add_fc("act_out", self.opts["lstm_out_dims"], self.opts["actions_count"])
+
+        # Load network from file if specified
+        if self.opts["load_filename"] != None:
+            print 'Loading parameters from file...'
+            try:
+                load_file = open(self.opts["load_filename"], 'rb')
+                load_params = cPickle.load(load_file)
+                for k in load_params:
+                    self.__dict__[k].set_value(load_params[k].get_value())
+            except IOError:
+                print 'Error opening file %s, ignoring...' % self.opts["load_filename"]
 
         print 'Initialization complete.'
 
@@ -386,111 +394,121 @@ class DynNet:
 
         # Start training
         print 'TRAINING START!'
-        mean = 0.
-        prev_mean = 0.
-        sum_rwd = 0
-        sum_step = 0
-        effective_gamenum = 0
-        for gamenum in xrange(0, self.opts["training_size"]):
-            # OK, here's how I intend to do it:
-            # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
-            # Then we could feed-forward and back-propagate the network using that sequence by ordinary theano.scan() and theano.grad().
+        try:
+            mean = 0.
+            prev_mean = 0.
+            sum_rwd = 0
+            sum_step = 0
+            effective_gamenum = 0
+            for gamenum in xrange(0, self.opts["training_size"]):
+                # OK, here's how I intend to do it:
+                # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
+                # Then we could feed-forward and back-propagate the network using that sequence by ordinary theano.scan() and theano.grad().
 
-            # Start a game
-            env.start()
+                # Start a game
+                env.start()
 
-            # Initialize training sequences
-            loc_in = [NP.zeros((self.opts["location_dims"],))]
-            orig_glm_in = [NP.zeros((self.opts["glimpse_width"], self.opts["glimpse_width"], self.opts["glimpse_count"]))]
-            glm_in = [NP.zeros((self.opts["glimpse_width"] * self.opts["glimpse_width"] * self.opts["glimpse_count"]))]
-            loc_out = [NP.zeros((self.opts["location_dims"],))]
-            core_out = [NP.zeros((self.opts["lstm_out_dims"],))]
-            candt = [NP.zeros((self.opts["internal_dims"],))]
-            real_out = [location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())]
-            reward = [0.]
-            chosen_loc = [NP.zeros((self.opts["location_dims"],))]
-            cost = [0.]
-            time = 0
-            rwd = 0
+                # Initialize training sequences
+                loc_in = [NP.zeros((self.opts["location_dims"],))]
+                orig_glm_in = [NP.zeros((self.opts["glimpse_width"], self.opts["glimpse_width"], self.opts["glimpse_count"]))]
+                glm_in = [NP.zeros((self.opts["glimpse_width"] * self.opts["glimpse_width"] * self.opts["glimpse_count"]))]
+                loc_out = [NP.zeros((self.opts["location_dims"],))]
+                core_out = [NP.zeros((self.opts["lstm_out_dims"],))]
+                candt = [NP.zeros((self.opts["internal_dims"],))]
+                real_out = [location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())]
+                reward = [0.]
+                chosen_loc = [NP.zeros((self.opts["location_dims"],))]
+                cost = [0.]
+                time = 0
+                rwd = 0
 
-            # Randomly choose a starting point
-            loc_in.append(NP.random.uniform(-1, 1, 2))
+                # Randomly choose a starting point
+                loc_in.append(NP.random.uniform(-1, 1, 2))
 
-            # Keep tracking (randomly?) until the ball leaves the screen
-            while not env.done():
-                # Fetch glimpses
-                orig_glm_in.append(glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size())))
-                glm_in.append(NP.asarray(orig_glm_in[-1]).flatten())
-                # Pass the glimpses, location, along with previous LSTM states into the step function ONCE.
-                lo, ca, co = step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
-                # Record the states and choice.
-                candt.append(ca)
-                core_out.append(co)
-                loc_out.append(lo)
+                # Keep tracking (randomly?) until the ball leaves the screen
+                while not env.done():
+                    # Fetch glimpses
+                    orig_glm_in.append(glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size())))
+                    glm_in.append(NP.asarray(orig_glm_in[-1]).flatten())
+                    # Pass the glimpses, location, along with previous LSTM states into the step function ONCE.
+                    lo, ca, co = step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
+                    # Record the states and choice.
+                    candt.append(ca)
+                    core_out.append(co)
+                    loc_out.append(lo)
 
-                # Step over
-                time += 1
-                env.tick()
+                    # Step over
+                    time += 1
+                    env.tick()
 
-                # Calculate informations (labels) available for determining the cost later.
-                # Meanwhile, select next location input.
-                if self.opts["learningmodel"] == 'supervised':
-                    # In supervised model, the next location the agent will choose is equal to the location network output.
-                    # No distribution is applied.
-                    loc_in.append(lo)
-                    chosen_loc.append(lo)
-                    # The locations stored by agent is zoomed to (-1, -1) ~ (1, 1).
-                    ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
-                    real_out.append(ro)
-                    rwd = (1 if env.is_tracking(location_restore(lo, env.size()), self.opts["glimpse_width"]) else 0)
-                    reward.append(rwd)
-                    #print '\ttime=', time
-                    #print '\t\tloc_out =', loc_out[-1]
-                    #print '\t\treal_out=', real_out[-1]
-                else:
-                    # In reinforcement learning model, the location picked by agent follows an independent bivariate normal distribution.
-                    cl = NP.random.multivariate_normal(lo, self.covariance.get_value())
-                    chosen_loc.append(cl)
-                    loc_in.append(cl)
-                    rwd = (1 if env.is_tracking(location_restore(cl, env.size()), self.opts["glimpse_width"]) else 0)
-                    reward.append(rwd)
-                    ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
-                    real_out.append(ro)
+                    # Calculate informations (labels) available for determining the cost later.
+                    # Meanwhile, select next location input.
+                    if self.opts["learningmodel"] == 'supervised':
+                        # In supervised model, the next location the agent will choose is equal to the location network output.
+                        # No distribution is applied.
+                        loc_in.append(lo)
+                        chosen_loc.append(lo)
+                        # The locations stored by agent is zoomed to (-1, -1) ~ (1, 1).
+                        ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
+                        real_out.append(ro)
+                        rwd = (1 if env.is_tracking(location_restore(lo, env.size()), self.opts["glimpse_width"]) else 0)
+                        reward.append(rwd)
+                        #print '\ttime=', time
+                        #print '\t\tloc_out =', loc_out[-1]
+                        #print '\t\treal_out=', real_out[-1]
+                    else:
+                        # In reinforcement learning model, the location picked by agent follows an independent bivariate normal distribution.
+                        cl = NP.random.multivariate_normal(lo, self.covariance.get_value())
+                        chosen_loc.append(cl)
+                        loc_in.append(cl)
+                        rwd = (1 if env.is_tracking(location_restore(cl, env.size()), self.opts["glimpse_width"]) else 0)
+                        reward.append(rwd)
+                        ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
+                        real_out.append(ro)
             
-            # Remove trailing loc_in element first.
-            loc_in.pop()
-            time -= 1
+                # Remove trailing loc_in element first.
+                loc_in.pop()
+                time -= 1
 
-            # Update parameters using learning function created above.
-            if self.opts["learningmodel"] == 'supervised':
-                c = learn_func(loc_in, glm_in, real_out)
-                mean = (mean * gamenum + c) / (gamenum + 1)
-                print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                        '\tSteps: %d' % time, '\x1b[37m'
-                prev_mean = mean
+                # Update parameters using learning function created above.
+                if self.opts["learningmodel"] == 'supervised':
+                    c = learn_func(loc_in, glm_in, real_out)
+                    mean = (mean * gamenum + c) / (gamenum + 1)
+                    print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                            '\tSteps: %d' % time, '\x1b[37m'
+                    prev_mean = mean
+                else:
+                    c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
+                    sum_rwd += sum(reward)
+                    sum_step += time
+                    mean_prob = float(sum_rwd) / sum_step
+                    if sum(reward) != 0:
+                        mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
+                        effective_gamenum += 1
+                    print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
+                            'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                            '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
+                            'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
+                    prev_mean = mean_prob
+
+                if (gamenum % 100 == 0):
+                    print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
+                    for t in range(0, time):
+                        loc_out_r = location_restore(loc_out[t], env.size())
+                        chosen_loc_r = location_restore(chosen_loc[t], env.size())
+                        real_out_r = location_restore(real_out[t], env.size())
+                        print t, '\t\t', loc_out_r, '\t', chosen_loc_r, '\t',\
+                                reward[t], '\t', real_out_r, '\t', \
+                                NP.sqrt(NP.dot(real_out_r - loc_out_r, real_out_r - loc_out_r)) if self.opts["learningmodel"] == 'supervised' \
+                                else NP.max(NP.abs(real_out_r - loc_out_r)), \
+                                '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
+                                NP.max(NP.abs(real_out_r - chosen_loc_r))
+                                
+        except (KeyboardInterrupt, IOError):
+            sys.stderr.write('Interrupt signal caught, saving network parameters...\n')
+            if self.opts["save_filename"] != None:
+                save_file = open(self.opts["save_filename"], 'wb')
+                cPickle.dump(self._params, save_file, protocol=2)
+                save_file.close()
             else:
-                c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
-                sum_rwd += sum(reward)
-                sum_step += time
-                mean_prob = float(sum_rwd) / sum_step
-                if sum(reward) != 0:
-                    mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
-                    effective_gamenum += 1
-                print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
-                        'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                        '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
-                        'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
-                prev_mean = mean_prob
-
-            if (gamenum % 100 == 0):
-                print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
-                for t in range(0, time):
-                    loc_out_r = location_restore(loc_out[t], env.size())
-                    chosen_loc_r = location_restore(chosen_loc[t], env.size())
-                    real_out_r = location_restore(real_out[t], env.size())
-                    print t, '\t\t', loc_out_r, '\t', chosen_loc_r, '\t',\
-                            reward[t], '\t', real_out_r, '\t', \
-                            NP.sqrt(NP.dot(real_out_r - loc_out_r, real_out_r - loc_out_r)) if self.opts["learningmodel"] == 'supervised' \
-                            else NP.max(NP.abs(real_out_r - loc_out_r)), \
-                            '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
-                            NP.max(NP.abs(real_out_r - chosen_loc_r))
+                sys.stderr.write('Save file not specified, ignoring...\n')
