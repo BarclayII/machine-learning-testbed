@@ -110,25 +110,26 @@ class DynNet:
         "lstm_out_dims" :   256,            # (MAYBE FIXED) dimension of LSTM output (=256)
         "location_xvar" :   0.005,          # variance of x-coordinate
         "location_yvar" :   0.005,          # variance of y-coordinate
-        "actions_count" :   0,              # (FIXED) number of possible actions
+        "actions_count" :   0,              # (FIXED, NOT USED) number of possible actions
         "learning_rate" :   0.005,          # learning rate
         "rate_decay_fn" :   linear_log,     # learning rate decay function r -> r', feel free to change this
         "grad_momentum" :   0.8,            # (NOT USED) gradient momentum, not clear how to use it
         "weight_decays" :   0.05,           # (NOT USED) weight decay, still not clear how to use it
         "training_size" :   200000,         # number of training times
         "minibatch_num" :   20,             # speaks itself, not used since stochastic gradient descent is not implemented yet
-        "exp_pool_size" :   50000,          # (NOT USED) size of experience pool
+        "exp_pool_size" :   50000,          # (NOT USED) size of experience pool, currently all experiences are taken into account.
         "batch_replace" :   None,           # (NOT USED) Replace algorithm, returns index of sample to be replaced
         "additional_fc" :   False,          # Additional fully-connected layers before and after LSTM core, not sure whether it should be added.
         "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
         "learningmodel" :   "reinforce_sum",# Learning model.
                                             # 'supervised' -> Supervised model.
                                             # 'reinforce_sum' -> REINFORCE model with costs summed rather than averaged.
-        "reinforce_bsl" :   bsl,            # Baseline function, takes output location and time, returns expectation
+        "reinforce_bsl" :   bsl,            # (NOT USED) Baseline function, takes output location and time, returns expectation
         "output_squash" :   identity,       # Location output squasher function
         "save_file_fmt" :   'pickle',       # Parameter save file format, currently only cPickle is supported
         "save_filename" :   'DynNet.pickle',# Save file name
-        "load_filename" :   None            # Load file name.  The trainer loads network from this file if this option is not None.
+        "load_filename" :   None,           # Load file name.  The trainer loads network from this file if this option is not None.
+        "learning_mode" :   'online',       # "online" -> Online learning, "replay" -> Experience replay
         }
         self._params = OrderedDict()
         self._deltas = OrderedDict()
@@ -331,6 +332,24 @@ class DynNet:
 
 
 
+    def online(self):
+        """
+        Online learning method
+        """
+        d = {}
+        if self.opts["learningmodel"] == 'supervised':
+            loc_in, glm_in, real_out = self.exp_pool[-1]
+            self.learn_func(loc_in, glm_in, real_out)
+        else:
+            loc_in, glm_in, time, chosen_loc, reward = self.exp_pool[-1]
+            self.learn_func(loc_in, glm_in, time, chosen_loc, reward)
+        for param in self._params:
+            d[param] = self._deltas[self._params[param]].get_value()
+        for param in self._params:
+            self._params[param].set_value(self._params[param].get_value() - d[param])
+
+
+
     def train(self, env):
         """
         Train the network within given environment @env.
@@ -406,6 +425,12 @@ class DynNet:
 
         # Define experience pool for replaying experience (and doing SGD).
         self.exp_pool = []
+
+        # Determine update method according to learning mode
+        if self.opts["learning_mode"] == 'online':
+            updater = self.online
+        elif self.opts["learning_mode"] == 'replay':
+            updater = self.replay
 
         # Start training
         print 'TRAINING START!'
@@ -498,11 +523,13 @@ class DynNet:
                     sum_rwd += sum(reward)
                     sum_step += time
                     mean_prob = float(sum_rwd) / sum_step
+                    # Put the game experience into the pool if we're using online learning method, or the game is effective and we're replaying experiences.
+                    if ((sum(reward) != 0) and (self.opts["learning_mode"] == 'replay')) or (self.opts["learning_mode"] == 'online'):
+                        self.exp_pool.append((loc_in, glm_in, time + 1, chosen_loc, reward))
+                    
                     if sum(reward) != 0:
                         mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
                         effective_gamenum += 1
-                        # Putting effective game into experience pool.
-                        self.exp_pool.append((loc_in, glm_in, time + 1, chosen_loc, reward))
                     print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
                             'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
@@ -510,7 +537,7 @@ class DynNet:
                     prev_mean = mean_prob
 
                 # Replay experiences.
-                self.replay()
+                updater()
 
                 if (gamenum % 100 == 0):
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
