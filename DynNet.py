@@ -29,7 +29,7 @@ def identity(x):
     return x
 
 def linear_log(x):
-    return TT.log(x + 1) * 0.01 + 0.99 * x
+    return NP.log(x + 1) * 0.01 + 0.99 * x
 
 def rectify(x):
     return TT.switch(x > 0, x, 0)

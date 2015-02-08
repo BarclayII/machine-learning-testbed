@@ -7,6 +7,6 @@ import pdb
 NP.set_printoptions(linewidth=150)
 
 e = CBE()
-n = DynNet(learningmodel='supervised')
+n = DynNet(learningmodel='supervised', save_filename='DynNetSup.pickle')
 
 n.train(e)
