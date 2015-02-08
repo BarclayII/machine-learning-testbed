@@ -1,6 +1,8 @@
 """
 Dynamic Network, not exactly as described in DeepMind paper.
 
+Combined experience replay technique.
+
 References:
     Recurrent Models of Visual Attention, Google DeepMind, 2014.
 """
@@ -114,15 +116,13 @@ class DynNet:
         "grad_momentum" :   0.8,            # (NOT USED) gradient momentum, not clear how to use it
         "weight_decays" :   0.05,           # (NOT USED) weight decay, still not clear how to use it
         "training_size" :   200000,         # number of training times
-        "training_mode" :   'online',       # Training modes.  'online' -> Online learning, 'mini' -> Mini-batch (NYI), 'full' -> Full-batch (NYI)
-        "minibatch_num" :   20,             # (NOT USED) speaks itself, not used since stochastic gradient descent is not implemented yet
-        "fullbatch_num" :   50000,          # (NOT USED) full batch size, not used since stochastic gradient descent is not implemented yet
+        "minibatch_num" :   20,             # speaks itself, not used since stochastic gradient descent is not implemented yet
+        "exp_pool_size" :   50000,          # (NOT USED) size of experience pool
         "batch_replace" :   None,           # (NOT USED) Replace algorithm, returns index of sample to be replaced
         "additional_fc" :   False,          # Additional fully-connected layers before and after LSTM core, not sure whether it should be added.
         "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
-        "learningmodel" :   "reinforce",    # Learning model.
+        "learningmodel" :   "reinforce_sum",# Learning model.
                                             # 'supervised' -> Supervised model.
-                                            # 'reinforce' -> REINFORCE model.
                                             # 'reinforce_sum' -> REINFORCE model with costs summed rather than averaged.
         "reinforce_bsl" :   bsl,            # Baseline function, takes output location and time, returns expectation
         "output_squash" :   identity,       # Location output squasher function
@@ -265,8 +265,6 @@ class DynNet:
         ### Location network ###
         # No squashing is applied to the location network output.
         # Only a simple linear transformation is done.
-        # EDIT: Added a tanh non-linear squasher to restrict glimpses from moving outside the environment.
-        #       The reinforcement model steps out extremely frequently
         loc_out     = self.opts["output_squash"](TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
 
         return loc_out, next_candt, core_out
@@ -306,6 +304,30 @@ class DynNet:
         #       References: Policy Gradient Methods for Reinforcement Learning with Function Approximation, R. S. Sutton et al., NIPS 1999.
         cost = pdf * reward
         return loc_out, next_candt, core_out, cost
+
+
+
+    def replay(self):
+        """
+        Experience replay and Stochastic Gradient Descent optimization (?)
+        """
+        d = {}
+        # Shuffle... then take the first few samples to do minibatch.
+        NP.random.shuffle(self.exp_pool)
+        batch_num = min(self.opts["minibatch_num"], len(self.exp_pool))
+        if batch_num == 0:
+            return
+        for i in range(0, batch_num):
+            if self.opts["learningmodel"] == 'supervised':
+                loc_in, glm_in, real_out = self.exp_pool[i]
+                self.learn_func(loc_in, glm_in, real_out)
+            else:
+                loc_in, glm_in, time, chosen_loc, reward = self.exp_pool[i]
+                self.learn_func(loc_in, glm_in, time, chosen_loc, reward)
+            for param in self._params:
+                d[param] = d.get(param, 0) + self._deltas[self._params[param]].get_value()
+        for param in self._params:
+            self._params[param].set_value(self._params[param].get_value() - d[param] / batch_num)
 
 
 
@@ -350,15 +372,8 @@ class DynNet:
             step_scan, _ = T.scan(fn=self.step_reinforce,
                                   sequences=[sym_loc_in_list, sym_glm_in_list, sym_step_num_list, sym_chosen_loc_list, sym_reward_list],
                                   outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
-            if self.opts["learningmodel"] == 'reinforce_sum':
-                sym_cost = step_scan[3].sum()
-            else:
-                sym_cost = step_scan[3].mean()      # Not sure whether it should be mean() or sum(), so I added both
+            sym_cost = step_scan[3].sum()
         sym_cost.name = 'cost'
-        if self.opts["learningmodel"] == 'supervised':
-            cost_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list], sym_cost)
-        else:
-            cost_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_steps, sym_chosen_loc_list, sym_reward_list], sym_cost)
 
         # Calculate gradients.
         print 'Building gradients...'
@@ -372,25 +387,25 @@ class DynNet:
         print 'Setting up update model...'
         updates = OrderedDict()
         sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
-        for i, param in enumerate(self._params.values()):
-            updates[param] = param - sym_learn_rate * sym_grads[i]
+        # Only deltas are updated by learning function.  Real action is taken in replay() function.
         for i, param in enumerate(self._params.values()):
             # Currently I'm not considering adding momentum and weight decays into gradient increment.
-            # See comments below for my reason.
             updates[self._deltas[param]] = sym_learn_rate * sym_grads[i]
-        updates[sym_learn_rate] = self.opts["rate_decay_fn"](sym_learn_rate)
 
         # Create learning functions for adjusting weights.
         if self.opts["learningmodel"] == 'supervised':
-            learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
-                                    sym_cost,
-                                    updates=updates,
-                                    on_unused_input='ignore')
+            self.learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
+                                         sym_cost,
+                                         updates=updates,
+                                         on_unused_input='ignore')
         else:
-            learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_steps, sym_chosen_loc_list, sym_reward_list],
-                                    sym_cost,
-                                    updates=updates,
-                                    on_unused_input='ignore')
+            self.learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_steps, sym_chosen_loc_list, sym_reward_list],
+                                         sym_cost,
+                                         updates=updates,
+                                         on_unused_input='ignore')
+
+        # Define experience pool for replaying experience (and doing SGD).
+        self.exp_pool = []
 
         # Start training
         print 'TRAINING START!'
@@ -470,26 +485,32 @@ class DynNet:
                 loc_in.pop()
                 time -= 1
 
-                # Update parameters using learning function created above.
+                # Check cost and add history into experience pool.
                 if self.opts["learningmodel"] == 'supervised':
-                    c = learn_func(loc_in, glm_in, real_out)
+                    c = self.learn_func(loc_in, glm_in, real_out)
                     mean = (mean * gamenum + c) / (gamenum + 1)
                     print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tSteps: %d' % time, '\x1b[37m'
                     prev_mean = mean
+                    self.exp_pool.append((loc_in, glm_in, real_out))
                 else:
-                    c = learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
+                    c = self.learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
                     sum_rwd += sum(reward)
                     sum_step += time
                     mean_prob = float(sum_rwd) / sum_step
                     if sum(reward) != 0:
                         mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
                         effective_gamenum += 1
+                        # Putting effective game into experience pool.
+                        self.exp_pool.append((loc_in, glm_in, time + 1, chosen_loc, reward))
                     print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
                             'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
                             'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
                     prev_mean = mean_prob
+
+                # Replay experiences.
+                self.replay()
 
                 if (gamenum % 100 == 0):
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
@@ -503,6 +524,9 @@ class DynNet:
                                 else NP.max(NP.abs(real_out_r - loc_out_r)), \
                                 '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
                                 NP.max(NP.abs(real_out_r - chosen_loc_r))
+                
+                # Decrease learning rate
+                sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
                                 
         except (KeyboardInterrupt, IOError):
             sys.stderr.write('Interrupt signal caught, saving network parameters...\n')
