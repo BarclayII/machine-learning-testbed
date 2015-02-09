@@ -48,6 +48,9 @@ def location_restore(loc, size):
 def bsl(loc, time):
     return 0.8 * time
 
+def empty_func(*args, **opts):
+    pass
+
 
 class DynNet:
     """
@@ -129,7 +132,7 @@ class DynNet:
         "save_file_fmt" :   'pickle',       # Parameter save file format, currently only cPickle is supported
         "save_filename" :   'DynNet.pickle',# Save file name
         "load_filename" :   None,           # Load file name.  The trainer loads network from this file if this option is not None.
-        "learning_mode" :   'online',       # "online" -> Online learning, "replay" -> Experience replay
+        "learning_mode" :   'online',       # "online" -> Online learning, "replay" -> Experience replay, "test" -> Test agent.
         }
         self._params = OrderedDict()
         self._deltas = OrderedDict()
@@ -394,22 +397,25 @@ class DynNet:
             sym_cost = step_scan[3].sum()
         sym_cost.name = 'cost'
 
-        # Calculate gradients.
-        print 'Building gradients...'
-        #sym_grads = {}
-        #for param in self._params.values():
-        #    print '\tBuilding gradient for %s...' % param.name
-        #    sym_grads[param] = T.grad(sym_cost, param)
-        #print '\tBuilding overall gradients...'
-        sym_grads = T.grad(sym_cost, self._params.values())
+        if self.opts["learning_mode"] != 'test':
+            # Calculate gradients.
+            print 'Building gradients...'
+            #sym_grads = {}
+            #for param in self._params.values():
+            #    print '\tBuilding gradient for %s...' % param.name
+            #    sym_grads[param] = T.grad(sym_cost, param)
+            #print '\tBuilding overall gradients...'
+            sym_grads = T.grad(sym_cost, self._params.values())
 
-        print 'Setting up update model...'
-        updates = OrderedDict()
-        sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
-        # Only deltas are updated by learning function.  Real action is taken in replay() function.
-        for i, param in enumerate(self._params.values()):
-            # Currently I'm not considering adding momentum and weight decays into gradient increment.
-            updates[self._deltas[param]] = sym_learn_rate * sym_grads[i]
+            print 'Setting up update model...'
+            updates = OrderedDict()
+            sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
+            # Only deltas are updated by learning function.  Real action is taken in replay() function.
+            for i, param in enumerate(self._params.values()):
+                # Currently I'm not considering adding momentum and weight decays into gradient increment.
+                updates[self._deltas[param]] = sym_learn_rate * sym_grads[i]
+        else:
+            updates = None
 
         # Create learning functions for adjusting weights.
         if self.opts["learningmodel"] == 'supervised':
@@ -431,6 +437,8 @@ class DynNet:
             updater = self.online
         elif self.opts["learning_mode"] == 'replay':
             updater = self.replay
+        else:
+            updater = empty_func
 
         # Start training
         print 'TRAINING START!'
@@ -483,7 +491,7 @@ class DynNet:
 
                     # Calculate informations (labels) available for determining the cost later.
                     # Meanwhile, select next location input.
-                    if self.opts["learningmodel"] == 'supervised':
+                    if (self.opts["learningmodel"] == 'supervised') or (self.opts["learning_mode"] == 'test'):
                         # In supervised model, the next location the agent will choose is equal to the location network output.
                         # No distribution is applied.
                         loc_in.append(lo)
@@ -530,7 +538,7 @@ class DynNet:
                     if sum(reward) != 0:
                         mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
                         effective_gamenum += 1
-                    print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', \
+                    print '\x1b[0;37m' if sum(reward) == 0 else ('\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m'), \
                             'Game #%d' % gamenum, '\tEffective #%d' % effective_gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tReward: %d' % sum(reward), '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), \
                             'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
@@ -538,6 +546,10 @@ class DynNet:
 
                 # Replay experiences.
                 updater()
+
+                # Decrease learning rate
+                if self.opts["learning_mode"] != 'test':
+                    sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
 
                 if (gamenum % 100 == 0):
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
@@ -551,9 +563,6 @@ class DynNet:
                                 else NP.max(NP.abs(real_out_r - loc_out_r)), \
                                 '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
                                 NP.max(NP.abs(real_out_r - chosen_loc_r))
-                
-                # Decrease learning rate
-                sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
                                 
         except (KeyboardInterrupt, IOError):
             sys.stderr.write('Interrupt signal caught, saving network parameters...\n')
