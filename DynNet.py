@@ -551,7 +551,7 @@ class DynNet:
                 if self.opts["learning_mode"] != 'test':
                     sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
 
-                if (gamenum % 100 == 0):
+                if (gamenum % 100 == 0) or ((self.opts["learningmodel"] == 'reinforce_sum') and sum(reward) == 0):
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
                     for t in range(0, time):
                         loc_out_r = location_restore(loc_out[t], env.size())
