@@ -35,6 +35,8 @@ class Ball:
             return False
         self.posX += self.velX
         self.posY += self.velY
+        #self.velX += NP.random.uniform(-0.2, 0.2)
+        #self.velY += NP.random.uniform(-0.2, 0.0)
         # The ball will bounce if colliding with the vertical walls
         while self.posX < 0 or self.posX > self._envsize:
             if self.posX < 0:

@@ -340,12 +340,13 @@ class DynNet:
         Online learning method
         """
         d = {}
-        if self.opts["learningmodel"] == 'supervised':
-            loc_in, glm_in, real_out = self.exp_pool[-1]
-            self.learn_func(loc_in, glm_in, real_out)
-        else:
-            loc_in, glm_in, time, chosen_loc, reward = self.exp_pool[-1]
-            self.learn_func(loc_in, glm_in, time, chosen_loc, reward)
+        #if self.opts["learningmodel"] == 'supervised':
+        #    loc_in, glm_in, real_out = self.exp_pool[-1]
+        #    self.learn_func(loc_in, glm_in, real_out)
+        #else:
+        #    loc_in, glm_in, time, chosen_loc, reward = self.exp_pool[-1]
+        #    self.learn_func(loc_in, glm_in, time, chosen_loc, reward)
+        # Delta updates already performed in train()
         for param in self._params:
             d[param] = self._deltas[self._params[param]].get_value()
         for param in self._params:
@@ -516,14 +517,16 @@ class DynNet:
             
                 # Remove trailing loc_in element first.
                 loc_in.pop()
-                time -= 1
 
                 # Check cost and add history into experience pool.
                 if self.opts["learningmodel"] == 'supervised':
                     c = self.learn_func(loc_in, glm_in, real_out)
+                    sum_rwd += sum(reward)
+                    sum_step += time
+                    mean_prob = float(sum_rwd) / sum_step
                     mean = (mean * gamenum + c) / (gamenum + 1)
-                    print '\x1b[31m' if mean > prev_mean else '\x1b[32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                            '\tSteps: %d' % time, '\x1b[37m'
+                    print '\x1b[0;31m' if mean > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                            '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), 'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
                     prev_mean = mean
                     self.exp_pool.append((loc_in, glm_in, real_out))
                 else:
@@ -551,7 +554,7 @@ class DynNet:
                 if self.opts["learning_mode"] != 'test':
                     sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
 
-                if (gamenum % 100 == 0) or ((self.opts["learningmodel"] == 'reinforce_sum') and sum(reward) == 0):
+                if (gamenum % 100 == 0) or ((self.opts["learning_mode"] == 'test') and gamenum % 25 == 0):
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
                     for t in range(0, time):
                         loc_out_r = location_restore(loc_out[t], env.size())
@@ -566,6 +569,8 @@ class DynNet:
                                 
         except (KeyboardInterrupt, IOError):
             sys.stderr.write('Interrupt signal caught, saving network parameters...\n')
+        finally:
+            sys.stderr.write('Saving...\n')
             if self.opts["save_filename"] != None:
                 save_file = open(self.opts["save_filename"], 'wb')
                 cPickle.dump(self._params, save_file, protocol=2)
