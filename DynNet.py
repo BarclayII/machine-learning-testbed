@@ -359,6 +359,8 @@ class DynNet:
         Train the network within given environment @env.
         """
 
+        print "Current Environment:", env
+
         # Setup step function.
         print 'Setting up step functions...'
         sym_loc_in = TT.vector('loc_in')
@@ -525,9 +527,9 @@ class DynNet:
                     sum_step += time
                     mean_prob = float(sum_rwd) / sum_step
                     mean = (mean * gamenum + c) / (gamenum + 1)
-                    print '\x1b[0;31m' if mean > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                    print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), 'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
-                    prev_mean = mean
+                    prev_mean = mean_prob
                     self.exp_pool.append((loc_in, glm_in, real_out))
                 else:
                     c = self.learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
