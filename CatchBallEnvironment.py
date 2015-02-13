@@ -154,6 +154,6 @@ class CatchBallEnvironment:
     def _refresh(self):
         self.M.fill(0)
         self.M[NP.int(NP.floor(self._ball.posX)),
-                NP.int(NP.floor(self._ball.posY))] = 255
+                NP.int(NP.floor(self._ball.posY))] = 1.0
         #self.M[NP.int(NP.floor(self._board.posX)), 0] = 255
         #self.M[NP.int(NP.floor(self._board.posX)) + 1, 0] = 255
