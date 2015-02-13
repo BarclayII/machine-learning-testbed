@@ -31,7 +31,7 @@ class Ball:
         """
         # If the ball is already at (or beyond) the bottom, return
         # directly
-        if self.posY < 0:
+        if self.posY < 0 or self.posY > self._envsize:
             return False
         self.posX += self.velX
         self.posY += self.velY
@@ -95,10 +95,10 @@ class CatchBallEnvironment:
 
     def start(self):
         angle = (NP.random.ranf() * 0.8 - 0.4) * NP.pi
-        ball_velocity = 1.0
+        ball_velocity = 1.0 if (NP.random.ranf() < 0.5) else -1.0
         ball_startPos = NP.random.ranf() * self._size
         board_startPos = NP.random.randint(self._size - 1)
-        self._ball = Ball(self, ball_startPos, self._size - 1,
+        self._ball = Ball(self, ball_startPos, self._size - 0.5 if ball_velocity == 1.0 else 0.5,
                 ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle))
         #self._board = Board(self, board_startPos)
         self._refresh()
@@ -112,7 +112,8 @@ class CatchBallEnvironment:
         #if 0 < self._ball.posY < 1 and \
         #        self._board.posX < self._ball.posX < self._board.posX + 2:
         #    return True
-        if self._ball.posY < 0:
+        if self._ball.posY < 0 or self._ball.posY > self._size or \
+                self._ball.posX < 0 or self._ball.posX > self._size:
             return True
         else:
             return False
@@ -152,8 +153,9 @@ class CatchBallEnvironment:
                 (top <= self._ball.posY <= bottom)
 
     def _refresh(self):
+        if self.done():
+            return
         self.M.fill(0)
-        self.M[NP.int(NP.floor(self._ball.posX)),
-                NP.int(NP.floor(self._ball.posY))] = 1.0
+        self.M[NP.int(NP.round(self._ball.posX - 0.5)), NP.int(NP.round(self._ball.posY - 0.5))] = 255
         #self.M[NP.int(NP.floor(self._board.posX)), 0] = 255
         #self.M[NP.int(NP.floor(self._board.posX)) + 1, 0] = 255
