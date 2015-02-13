@@ -368,7 +368,7 @@ class DynNet:
         sym_prev_candt = TT.vector('prev_candt')
         sym_prev_outpt = TT.vector('prev_outpt')
         sym_loc_out, sym_next_candt, sym_next_outpt = self.step_lstm(sym_loc_in, sym_glm_in, sym_prev_candt, sym_prev_outpt)
-        step_func = T.function([sym_loc_in, sym_glm_in, sym_prev_candt, sym_prev_outpt], [sym_loc_out, sym_next_candt, sym_next_outpt])
+        self.step_func = T.function([sym_loc_in, sym_glm_in, sym_prev_candt, sym_prev_outpt], [sym_loc_out, sym_next_candt, sym_next_outpt])
         
         # Calculate mean cost for all steps.
         # Suppose we have a list of inputs here, represented as symbols...
@@ -482,7 +482,7 @@ class DynNet:
                     orig_glm_in.append(glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size())))
                     glm_in.append(NP.asarray(orig_glm_in[-1]).flatten())
                     # Pass the glimpses, location, along with previous LSTM states into the step function ONCE.
-                    lo, ca, co = step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
+                    lo, ca, co = self.step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
                     # Record the states and choice.
                     candt.append(ca)
                     core_out.append(co)

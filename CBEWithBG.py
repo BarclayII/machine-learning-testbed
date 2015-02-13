@@ -159,6 +159,6 @@ class CatchBallEnvironment:
             return
         self.M = NP.copy(self.bg) / 255.0
         self.M[NP.int(NP.round(self._ball.posX - 0.5)), NP.int(NP.round(self._ball.posY - 0.5))] = max(
-                self.M[NP.int(NP.round(self._ball.posX - 0.5)), NP.int(NP.round(self._ball.posY - 0.5))], self._ball.intensity)
+                self.M[NP.int(NP.round(self._ball.posX - 0.5)), NP.int(NP.round(self._ball.posY - 0.5))], self._ball.intensity / 255.0)
         #self.M[NP.int(NP.floor(self._board.posX)), 0] = 255
         #self.M[NP.int(NP.floor(self._board.posX)) + 1, 0] = 255
