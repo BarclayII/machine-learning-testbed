@@ -14,6 +14,9 @@ import theano.tensor as TT
 import theano.tensor.nnet as NN
 import theano.sandbox.linalg as LA
 
+from matplotlib import pyplot as PL
+from matplotlib import animation
+
 import numpy as NP
 
 from Glimpse import glimpse
@@ -354,11 +357,7 @@ class DynNet:
 
 
 
-    def train(self, env):
-        """
-        Train the network within given environment @env.
-        """
-
+    def setup(self, env):
         print "Current Environment:", env
 
         # Setup step function.
@@ -432,6 +431,14 @@ class DynNet:
                                          updates=updates,
                                          on_unused_input='ignore')
 
+
+
+    def train(self, env):
+        """
+        Train the network within given environment @env.
+        """
+        self.setup(env)
+
         # Define experience pool for replaying experience (and doing SGD).
         self.exp_pool = []
 
@@ -469,17 +476,25 @@ class DynNet:
                 real_out = [location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())]
                 reward = [0.]
                 chosen_loc = [NP.zeros((self.opts["location_dims"],))]
+                img_ca = []
+                img_env = []
+                img_glm = []
                 cost = [0.]
                 time = 0
                 rwd = 0
+                fig_ca = PL.figure(1)
+                fig_env = PL.figure(2)
+                fig_glm = PL.figure(3)
 
                 # Randomly choose a starting point
                 loc_in.append(NP.random.uniform(-1, 1, 2))
+                # print env.done(), env._ball.posX, env._ball.posY
 
                 # Keep tracking (randomly?) until the ball leaves the screen
                 while not env.done():
                     # Fetch glimpses
-                    orig_glm_in.append(glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size())))
+                    glm = glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size()))
+                    orig_glm_in.append(glm)
                     glm_in.append(NP.asarray(orig_glm_in[-1]).flatten())
                     # Pass the glimpses, location, along with previous LSTM states into the step function ONCE.
                     lo, ca, co = self.step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
@@ -516,6 +531,11 @@ class DynNet:
                         reward.append(rwd)
                         ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
                         real_out.append(ro)
+
+                    # Build an image containing LSTM candidate vector, environment matrix, and the glimpses
+                    img_ca.append([PL.matshow(ca.reshape((16, 16)), fignum=1)])
+                    img_env.append([PL.matshow(env.M, cmap='gray', fignum=2)])
+                    img_glm.append([PL.matshow(NP.concatenate(glm), cmap='gray', fignum=3)])
             
                 # Remove trailing loc_in element first.
                 loc_in.pop()
@@ -552,11 +572,10 @@ class DynNet:
                 # Replay experiences.
                 updater()
 
-                # Decrease learning rate
-                if self.opts["learning_mode"] != 'test':
-                    sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
-
-                if (gamenum % 100 == 0) or ((self.opts["learning_mode"] == 'test') and gamenum % 25 == 0):
+                if (gamenum % 100 == 0):
+                    if "bg" in env.__dict__:
+                        print 'Environment'
+                        print env.bg
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
                     for t in range(0, time):
                         loc_out_r = location_restore(loc_out[t], env.size())
@@ -569,6 +588,16 @@ class DynNet:
                                 '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
                                 NP.max(NP.abs(real_out_r - chosen_loc_r))
                                 
+                # Decrease learning rate
+                if self.opts["learning_mode"] != 'test':
+                    sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
+                else:
+                    # Plot the image
+                    ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay = (time + 5) * 500)
+                    ani_env = animation.ArtistAnimation(fig_env, img_env, interval=500, blit=True, repeat_delay = (time + 5) * 500)
+                    ani_glm = animation.ArtistAnimation(fig_glm, img_glm, interval=500, blit=True, repeat_delay = (time + 5) * 500)
+                    PL.show()
+
         except (KeyboardInterrupt, IOError):
             sys.stderr.write('Interrupt signal caught, saving network parameters...\n')
         finally:
