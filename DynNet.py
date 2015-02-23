@@ -411,11 +411,11 @@ class DynNet:
 
             print 'Setting up update model...'
             updates = OrderedDict()
-            sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
+            self.sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
             # Only deltas are updated by learning function.  Real action is taken in replay() function.
             for i, param in enumerate(self._params.values()):
                 # Currently I'm not considering adding momentum and weight decays into gradient increment.
-                updates[self._deltas[param]] = sym_learn_rate * sym_grads[i]
+                updates[self._deltas[param]] = self.sym_learn_rate * sym_grads[i]
         else:
             updates = None
 
@@ -572,7 +572,7 @@ class DynNet:
                 # Replay experiences.
                 updater()
 
-                if (gamenum % 100 == 0):
+                if (gamenum % 100 == 0) or (self.opts["learning_mode"] == 'test'):
                     if "bg" in env.__dict__:
                         print 'Environment'
                         print env.bg
@@ -590,7 +590,7 @@ class DynNet:
                                 
                 # Decrease learning rate
                 if self.opts["learning_mode"] != 'test':
-                    sym_learn_rate.set_value(self.opts["rate_decay_fn"](sym_learn_rate.get_value()))
+                    self.sym_learn_rate.set_value(self.opts["rate_decay_fn"](self.sym_learn_rate.get_value()))
                 else:
                     # Plot the image
                     ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay = (time + 5) * 500)

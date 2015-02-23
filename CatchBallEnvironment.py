@@ -155,7 +155,7 @@ class CatchBallEnvironment:
     def _refresh(self):
         if self.done():
             return
-        self.M.fill(0)
+        self.M = NP.zeros((self._size, self._size))
         self.M[NP.int(NP.round(self._ball.posX - 0.5)), NP.int(NP.round(self._ball.posY - 0.5))] = 255
         #self.M[NP.int(NP.floor(self._board.posX)), 0] = 255
         #self.M[NP.int(NP.floor(self._board.posX)) + 1, 0] = 255

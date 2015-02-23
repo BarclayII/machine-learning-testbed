@@ -114,8 +114,8 @@ class CatchBallEnvironment:
         #if 0 < self._ball.posY < 1 and \
         #        self._board.posX < self._ball.posX < self._board.posX + 2:
         #    return True
-        if self._ball.posY < 1 or self._ball.posY > self._size - 1 or \
-                self._ball.posX < 1 or self._ball.posX > self._size - 1:
+        if self._ball.posY < 0 or self._ball.posY > self._size or \
+                self._ball.posX < 0 or self._ball.posX > self._size:
             return True
         else:
             return False
