@@ -16,6 +16,7 @@ import theano.sandbox.linalg as LA
 
 from matplotlib import pyplot as PL
 from matplotlib import animation
+from matplotlib.patches import Rectangle
 
 import numpy as NP
 
@@ -458,6 +459,8 @@ class DynNet:
             sum_rwd = 0
             sum_step = 0
             effective_gamenum = 0
+            rect_width = [self.opts["glimpse_width"] * i for i in (1, 2, 4)]
+            ecolor = ["red", "green", "blue"]
             for gamenum in xrange(0, self.opts["training_size"]):
                 # OK, here's how I intend to do it:
                 # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
@@ -485,6 +488,7 @@ class DynNet:
                 fig_ca = PL.figure(1)
                 fig_env = PL.figure(2)
                 fig_glm = PL.figure(3)
+                glm_ax = [fig_glm.add_subplot(3, 1, i) for i in [1, 2, 3]]
 
                 # Randomly choose a starting point
                 loc_in.append(NP.random.uniform(-1, 1, 2))
@@ -502,6 +506,17 @@ class DynNet:
                     candt.append(ca)
                     core_out.append(co)
                     loc_out.append(lo)
+
+                    if self.opts["learning_mode"] == 'test':
+                        # Build an image containing LSTM candidate vector, environment matrix, and the glimpses
+                        img_ca.append([fig_ca.gca().matshow(ca.reshape((16, 16)), cmap='gray')])
+                        rect_center = location_restore(NP.asarray([loc_in[-1][1], loc_in[-1][0]]), env.size())
+                        rect_left_bottom = [NP.round(rect_center - 0.5) + 0.5 - self.opts["glimpse_width"] * 0.5 * i for i in (1, 2, 4)]
+                        img_env.append([fig_env.gca().matshow(env.M, cmap='gray')] +
+                                       [fig_env.gca().add_patch(Rectangle(rect_left_bottom[i], rect_width[i], rect_width[i], ec=ecolor[i], fill=False)) \
+                                               for i in (0, 1, 2)])
+                        img_glm.append([glm_ax[i].matshow(glm[i], cmap='gray') for i in (0, 1, 2)])
+            
 
                     # Step over
                     time += 1
@@ -532,11 +547,6 @@ class DynNet:
                         ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
                         real_out.append(ro)
 
-                    # Build an image containing LSTM candidate vector, environment matrix, and the glimpses
-                    img_ca.append([PL.matshow(ca.reshape((16, 16)), fignum=1)])
-                    img_env.append([PL.matshow(env.M, cmap='gray', fignum=2)])
-                    img_glm.append([PL.matshow(NP.concatenate(glm), cmap='gray', fignum=3)])
-            
                 # Remove trailing loc_in element first.
                 loc_in.pop()
 
@@ -593,9 +603,9 @@ class DynNet:
                     self.sym_learn_rate.set_value(self.opts["rate_decay_fn"](self.sym_learn_rate.get_value()))
                 else:
                     # Plot the image
-                    ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay = (time + 5) * 500)
-                    ani_env = animation.ArtistAnimation(fig_env, img_env, interval=500, blit=True, repeat_delay = (time + 5) * 500)
-                    ani_glm = animation.ArtistAnimation(fig_glm, img_glm, interval=500, blit=True, repeat_delay = (time + 5) * 500)
+                    ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay=2000)
+                    ani_env = animation.ArtistAnimation(fig_env, img_env, interval=500, blit=True, repeat_delay=2000)
+                    ani_glm = animation.ArtistAnimation(fig_glm, img_glm, interval=500, blit=True, repeat_delay=2000)
                     PL.show()
 
         except (KeyboardInterrupt, IOError):
