@@ -33,7 +33,7 @@ def identity(x):
     return x
 
 def linear_log(x):
-    return NP.log(x + 1) * 0.01 + 0.99 * x
+    return NP.log(x + 1) * 0.001 + 0.999 * x
 
 def rectify(x):
     return TT.switch(x > 0, x, 0)
@@ -120,11 +120,12 @@ class DynNet:
         "actions_count" :   0,              # (FIXED, NOT USED) number of possible actions
         "learning_rate" :   0.005,          # learning rate
         "rate_decay_fn" :   linear_log,     # learning rate decay function r -> r', feel free to change this
-        "grad_momentum" :   0.8,            # (NOT USED) gradient momentum, not clear how to use it
+        "cov_decay_fun" :   linear_log,     # variance decay function r -> r'
+        "grad_momentum" :   0.0,            # gradient momentum, not clear how to use it
         "weight_decays" :   0.05,           # (NOT USED) weight decay, still not clear how to use it
         "training_size" :   200000,         # number of training times
-        "minibatch_num" :   20,             # speaks itself, not used since stochastic gradient descent is not implemented yet
-        "exp_pool_size" :   50000,          # (NOT USED) size of experience pool, currently all experiences are taken into account.
+        "minibatch_num" :   10,             # speaks itself
+        "exp_pool_size" :   50000,          # size of experience pool.
         "batch_replace" :   None,           # (NOT USED) Replace algorithm, returns index of sample to be replaced
         "additional_fc" :   False,          # Additional fully-connected layers before and after LSTM core, not sure whether it should be added.
         "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
@@ -146,7 +147,7 @@ class DynNet:
             if (k not in self.opts):
                 continue
             elif (self.opts[k] != None) and (type(self.opts[k]) is not type(options[k])):
-                raise TypeError("Type of option %s is not %s", (k, type(self.opts[k])))
+                raise TypeError("Type of option %s is not %s" % (k, type(self.opts[k])))
             else:
                 self.opts[k] = options[k]
         print 'Current options:'
@@ -415,8 +416,8 @@ class DynNet:
             self.sym_learn_rate = T.shared(self.opts["learning_rate"], name='learn_rate')
             # Only deltas are updated by learning function.  Real action is taken in replay() function.
             for i, param in enumerate(self._params.values()):
-                # Currently I'm not considering adding momentum and weight decays into gradient increment.
-                updates[self._deltas[param]] = self.sym_learn_rate * sym_grads[i]
+                # Currently I'm not considering adding weight decays into gradient increment.
+                updates[self._deltas[param]] = self._deltas[param] * self.opts["grad_momentum"] + self.sym_learn_rate * sym_grads[i]
         else:
             updates = None
 
@@ -512,10 +513,10 @@ class DynNet:
                         img_ca.append([fig_ca.gca().matshow(ca.reshape((16, 16)), cmap='gray')])
                         rect_center = location_restore(NP.asarray([loc_in[-1][1], loc_in[-1][0]]), env.size())
                         rect_left_bottom = [NP.round(rect_center - 0.5) + 0.5 - self.opts["glimpse_width"] * 0.5 * i for i in (1, 2, 4)]
-                        img_env.append([fig_env.gca().matshow(env.M, cmap='gray')] +
-                                       [fig_env.gca().add_patch(Rectangle(rect_left_bottom[i], rect_width[i], rect_width[i], ec=ecolor[i], fill=False)) \
+                        img_env.append([fig_env.gca().matshow(env.M, cmap='gray', vmin=0, vmax=255)] +
+                                       [fig_env.gca().add_patch(Rectangle(rect_left_bottom[i], rect_width[i], rect_width[i], ec=ecolor[i], fill=False, lw=2)) \
                                                for i in (0, 1, 2)])
-                        img_glm.append([glm_ax[i].matshow(glm[i], cmap='gray') for i in (0, 1, 2)])
+                        img_glm.append([glm_ax[i].matshow(glm[i], cmap='gray', vmin=0, vmax=255) for i in (0, 1, 2)])
             
 
                     # Step over
@@ -560,17 +561,17 @@ class DynNet:
                     print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
                             '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), 'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
                     prev_mean = mean_prob
-                    self.exp_pool.append((loc_in, glm_in, real_out))
                 else:
                     c = self.learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
                     sum_rwd += sum(reward)
                     sum_step += time
                     mean_prob = float(sum_rwd) / sum_step
-                    # Put the game experience into the pool if we're using online learning method, or the game is effective and we're replaying experiences.
-                    if ((sum(reward) != 0) and (self.opts["learning_mode"] == 'replay')) or (self.opts["learning_mode"] == 'online'):
-                        self.exp_pool.append((loc_in, glm_in, time + 1, chosen_loc, reward))
-                    
+                    # Put the game experience into the pool if the game is effective and we're replaying experiences.
                     if sum(reward) != 0:
+                        if len(self.exp_pool) < self.opts["exp_pool_size"]:
+                            self.exp_pool.append((loc_in, glm_in, time, chosen_loc, reward))
+                        else:
+                            self.exp_pool[NP.random.randint(0, self.opts["exp_pool_size"])] = (loc_in, glm_in, time, chosen_loc, reward)
                         mean = (mean * effective_gamenum + c) / (effective_gamenum + 1)
                         effective_gamenum += 1
                     print '\x1b[0;37m' if sum(reward) == 0 else ('\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m'), \
@@ -582,7 +583,7 @@ class DynNet:
                 # Replay experiences.
                 updater()
 
-                if (gamenum % 100 == 0) or (self.opts["learning_mode"] == 'test'):
+                if (self.opts["learning_mode"] == 'test'):
                     if "bg" in env.__dict__:
                         print 'Environment'
                         print env.bg
@@ -601,6 +602,7 @@ class DynNet:
                 # Decrease learning rate
                 if self.opts["learning_mode"] != 'test':
                     self.sym_learn_rate.set_value(self.opts["rate_decay_fn"](self.sym_learn_rate.get_value()))
+                    self.covariance.set_value(self.opts["cov_decay_fun"](self.covariance.get_value()))
                 else:
                     # Plot the image
                     ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay=2000)

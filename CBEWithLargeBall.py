@@ -11,7 +11,7 @@ class Ball:
     """
     The ball in the catch-ball game.
     """
-    def __init__(self, env, posX, posY, velX, velY, intensity):
+    def __init__(self, env, posX, posY, velX, velY, intensity=255, accX=0, accY=0):
         """
         Initializes a ball with given position and velocity in pixels
         or pixels per frame, in the given environment @env.
@@ -21,6 +21,8 @@ class Ball:
         self.posY = posY
         self.velX = velX
         self.velY = velY
+        self.accX = accX
+        self.accY = accY
         self._envsize = env.size()
         self.intensity = intensity
 
@@ -36,8 +38,8 @@ class Ball:
             return False
         self.posX += self.velX
         self.posY += self.velY
-        #self.velX += NP.random.uniform(-0.2, 0.2)
-        #self.velY += NP.random.uniform(-0.2, 0.0)
+        self.velX += self.accX
+        self.velY += self.accY
         # The ball will bounce if colliding with the vertical walls
         while self.posX < 1 or self.posX > self._envsize - 1:
             if self.posX < 1:
@@ -101,7 +103,7 @@ class CatchBallEnvironment:
         ball_startPos = NP.random.ranf() * (self._size - 2) + 1
         board_startPos = NP.random.randint(self._size - 1)
         self._ball = Ball(self, ball_startPos, self._size - 1.5 if ball_velocity == 1.0 else 1.5,
-                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle), intensity)
+                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle), NP.random.randint(0, 256))
         #self._board = Board(self, board_startPos)
         self._refresh()
 
@@ -162,6 +164,6 @@ class CatchBallEnvironment:
         my = NP.int(NP.round(self._ball.posY - 0.5))
         for i in range(-1, 2):
             for j in range(-1, 2):
-                self.M[mx + i, my + j] = max(self.M[mx + i, my + j], self._ball.intensity)
+                self.M[mx + i, my + j] = self._ball.intensity#max(self.M[mx + i, my + j], self._ball.intensity)
         #self.M[NP.int(NP.floor(self._board.posX)), 0] = 255
         #self.M[NP.int(NP.floor(self._board.posX)) + 1, 0] = 255
