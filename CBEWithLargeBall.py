@@ -103,7 +103,7 @@ class CatchBallEnvironment:
         ball_startPos = NP.random.ranf() * (self._size - 2) + 1
         board_startPos = NP.random.randint(self._size - 1)
         self._ball = Ball(self, ball_startPos, self._size - 1.5 if ball_velocity == 1.0 else 1.5,
-                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle), NP.random.randint(0, 256))
+                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle), 255, 0.3, 0)#NP.random.randint(0, 256))
         #self._board = Board(self, board_startPos)
         self._refresh()
 

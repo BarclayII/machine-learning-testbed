@@ -11,7 +11,7 @@ class Ball:
     """
     The ball in the catch-ball game.
     """
-    def __init__(self, env, posX, posY, velX, velY):
+    def __init__(self, env, posX, posY, velX, velY, accX=0, accY=0):
         """
         Initializes a ball with given position and velocity in pixels
         or pixels per frame, in the given environment @env.
@@ -21,6 +21,8 @@ class Ball:
         self.posY = posY
         self.velX = velX
         self.velY = velY
+        self.accX = accX
+        self.accY = accY
         self._envsize = env.size()
 
     def tick(self):
@@ -35,9 +37,10 @@ class Ball:
             return False
         self.posX += self.velX
         self.posY += self.velY
+        self.velX += self.accX
+        self.velY += self.accY
         #self.velX += NP.random.uniform(-0.2, 0.2)
         #self.velY += NP.random.uniform(-0.2, 0.0)
-        # The ball will bounce if colliding with the vertical walls
         while self.posX < 0 or self.posX > self._envsize:
             if self.posX < 0:
                 self.posX = -self.posX
@@ -98,8 +101,8 @@ class CatchBallEnvironment:
         ball_velocity = 1.0 if (NP.random.ranf() < 0.5) else -1.0
         ball_startPos = NP.random.ranf() * self._size
         board_startPos = NP.random.randint(self._size - 1)
-        self._ball = Ball(self, ball_startPos, self._size - 0.5 if ball_velocity == 1.0 else 0.5,
-                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle))
+        self._ball = Ball(self, ball_startPos, self._size - 0.5 if ball_velocity > 0 else 0.5,
+                ball_velocity * NP.sin(angle), -ball_velocity * NP.cos(angle), 0, 0)
         #self._board = Board(self, board_startPos)
         self._refresh()
 

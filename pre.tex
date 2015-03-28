@@ -1,0 +1,593 @@
+\documentclass[10pt,CJK]{beamer}
+\usetheme{Singapore}
+
+\usepackage[noindent,UTF8]{ctexcap}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{textcomp}
+
+\author{甘全}
+\title{强化学习与对象追踪及检测}
+%\subtitle{}
+%\logo{}
+%\institute{}
+%\date{}
+%\subject{}
+%\setbeamercovered{transparent}
+%\setbeamertemplate{navigation symbols}{}
+
+\begin{document}
+	\maketitle
+	
+	\begin{frame}
+		\frametitle{内容概要}
+		\begin{itemize}
+			\item 问题的提出
+			\item 强化学习简介
+			\begin{itemize}
+				\item 马尔可夫决策过程
+				\item Q-Learning与Sarsa
+				\item “强化”算法系列(REINFORCE Algorithms)
+			\end{itemize}
+			\item 所谓“深度强化学习”
+			\begin{itemize}
+				\item 深度Q-Learning(DeepMind, 2013)
+				\item 循环注意力模型(Recurrent Attention Model)
+				(DeepMind, 2014)
+			\end{itemize}
+			\item Tracking as a game
+			\item 新手上路，多多包涵
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{问题的提出---~Learning Where \& What
+			\only<8->{+ What to Do}}
+		\pause
+		\begin{itemize}
+			\item 从视频中对物体进行追踪\pause
+			\begin{itemize}
+				\item 静止、匀速直线、圆周、抛物线、随机游走……\pause
+				\item 从各个角度、各种距离去观察\pause
+				\item 成功以任何角度、任何距离追踪某个物体的任何运动\pause
+				\item 就算提取到该物体的特征(?)\pause
+			\end{itemize}
+			\item 将在视频中提取得到的特征用在静态图像上，
+			以进行对象检测(?)\pause
+			\item 对被追踪/检测的对象的特征(或行为等)作决策\pause
+			\begin{itemize}
+				\item 分类/标注\pause
+				\item 视角转动\pause
+				\item 镜头平移、伸缩
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{一个尝试}
+		\begin{itemize}
+			\item 如果把检测、追踪、分类、决策的过程当作一个单人游戏……
+			\pause
+			\begin{itemize}
+				\item 设计合适的运行规则和奖励惩罚
+				\pause
+				\item 让计算机去玩这个游戏
+				\pause
+				\item 让计算机找到解这个游戏的最佳策略
+				\pause
+				\item 问题就能得到解决
+			\end{itemize}
+			\pause
+			\item 强化学习(Reinforcement Learning)
+			\pause
+			\begin{itemize}
+				\item 如何设计游戏规则\pause
+				\item 如何设计计算机寻找该游戏最佳策略的算法
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle<1-5>{什么是游戏}
+		\begin{itemize}
+			\item \only<2-6>{\alert{状态}(state)，可以分两类：
+			\begin{enumerate}
+				\item 内部状态(内部数据或任何不可为玩家所知的信息)
+				\item 可见状态(视觉、听觉、感觉等)
+			\end{enumerate}}
+			\only<7->{状态集合：
+			\begin{enumerate}
+				\item 内部状态集合$S$
+				\item<alert@11|uncover@11> 可见状态集合$\Omega$
+			\end{enumerate}}
+			\item \only<3-7>{可供选择的\alert{决策或行动}(action)}
+			\only<8->{可供选择的决策或行动集合$A$}
+			\item \only<4-8>{状态间的\alert{转移规则}
+			\begin{itemize}
+				\item 大部分情况下，转移不是唯一的
+				\item 可见状态也有相应的转移规则
+			\end{itemize}}
+			\only<9->{状态转移函数
+				$P_a\left(s\right)\colon S\times A\mapsto S$
+			\begin{itemize}
+				\item 更准确地说，是一个分布列或者分布密度函数
+				$P_a\left(s,s'\right)$
+				\item<alert@11|uncover@11> 可见状态转移函数
+				$\Pi_a\left(\omega,\omega'\right)$
+			\end{itemize}}
+			\item \only<5-9>{状态转移时得到的\alert{收益}(reward)规则}
+			\only<10->{收益函数
+				$R_a\left(s,s'\right)\colon S\times A\times S\mapsto \mathbf{R}$}
+		\end{itemize}
+		\frametitle<6->{马尔可夫决策过程(Markov Decision Process)}
+		\frametitle<11->{\alert{部分可见}
+			马尔可夫决策过程(Partially Observable MDP)}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{求解MDP——动态规划法}
+		\begin{itemize}
+			\item 求解MDP，即寻找一个最优\alert<1>{策略}(policy)
+			$\pi\left(s\right)\colon S\mapsto A$
+			\begin{itemize}
+				\item 能够在所有状态下找到使收益期望最大的行动
+			\end{itemize}\pause
+			\item 最优策略的“子策略”也是最优的(最优子结构)\pause
+			\item 动态规划
+			\begin{itemize}
+				\item 策略函数，当前状态下期望收益最高的行动\\
+				$\pi\left(s\right)=
+				\arg\max_a\lbrace
+				\sum_{s'}
+				\alert<6>{P}_a\left(s,s'\right)\left[
+				\alert<6>{R}_a\left(s,s'\right)+
+				\only<5->{\alert<5>{\gamma}}V(s')
+				\right]
+				\rbrace$
+				\item 价值函数，当前状态下按最优策略可得到的期望总收益\\
+				\only<1-3>{
+				$V\left(s\right)=
+				\sum_{s'}P_{\pi\left(s\right)}
+				\left(s,s'\right)\left[
+				R_{\pi\left(s\right)}\left(s,s'\right)+
+				\only<5->{\gamma}V\left(s'\right)
+				\right]$}
+				\only<4->{
+				$V\left(s\right)=\max_{a}
+				\sum_{s'}\alert<6>{P}_a\left(s,s'\right)\left[
+				\alert<6>{R}_a\left(s,s'\right)+
+				\only<5->{\alert<5>{\gamma}}
+				V\left(s'\right)\right]
+				$}
+			\end{itemize}\pause\pause
+			\item \alert<5>{衰减因子(discount factor)
+				$\gamma\in\left[0,1\right)$}
+			\begin{itemize}
+				\item 展开后有$\gamma^n$项，在步数足够大时趋近于0，可收敛
+			\end{itemize}\pause
+			\item 新问题：
+			\begin{itemize}
+				\item \alert<6>{$P$与$R$一般未知}
+				\item 需要已知状态集合$S$及终止状态，计算顺序从后往前
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+		
+	\begin{frame}
+		\frametitle{求解MDP——蒙特卡罗法}
+		\begin{itemize}
+			\item 随机初始化一个策略$\pi$\pause
+			\item 进行多次游戏，获得各个状态下采用各个行动时的期望总收益
+			\begin{itemize}
+				\item 此即\alert<2>{质量函数}\\
+				$Q\left(s,a\right)=
+				\sum_{s'}P_{a}\left(s,s'\right)\left[
+				R_{a}(s,s')+\gamma V\only<3->{\alert<3>{_\pi}}(s')
+				\right]$
+			\end{itemize}\pause\pause
+			\item 将每一个$\pi\left(s\right)$更新为
+			$\arg\max_{a}Q\left(s,a\right)$\pause
+			\item 如是重复，直至收敛\pause
+			\item 不再依赖$P$和$R$\pause
+			\item 计算顺序从前到后，不需要已知终止状态\pause
+			\item 问题：
+			\begin{itemize}
+				\item 效率太低
+				\item 不适用于长期甚至不终止游戏
+				\item 状态集合有限小(尽管不必全部已知)
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Q-\only<1-9>{Learning}\only<10>{Network}}
+		\begin{itemize}
+			\item $\alert<10>{Q
+			\only<3->{\alert<3>{_{i+1}}}
+			\left(s,a\right)}=
+			\only<1-6>{\sum_{s'}P_{a}\left(s,s'\right)}
+			\only<7->{\alert<7>{\alpha}}
+			\left[
+			\alert<10>{
+			\only<1-5>{R_{a}(s,s')}
+			\only<6->{\alert<6>{r}}
+			+\gamma
+			\only<1>{V(s')}
+			\only<2->{\alert<2>{\max_{a'}Q
+			\only<3->{\alert<3>{_{i}}}
+			\left(s',a'\right)}}}
+			\right]
+			\only<7->{\alert<7>{+\left(1-\alpha\right)
+			Q_i\left(s,a\right)}}
+			$ \pause\pause\pause
+			\item 随机选取一个初始状态$s_0\in S$\pause
+			\item 对当前状态$s$，(按某一分布)选取一个合适的行动$a$
+			\begin{itemize}
+				\item 一般按$\epsilon$-贪心($\epsilon$-greedy)分布，
+				Softmax等
+			\end{itemize}\pause
+			\item 观察下一状态$s'$和收益$r$\pause
+			\item 结合新的$Q$值和原有的$Q$值，更新$Q\left(s,a\right)$
+			\begin{itemize}
+				\item 引入学习率$\alpha$，达到平均效果
+			\end{itemize}\pause
+			\item 如是重复，直至收敛\pause
+			\item 应用：对每一当前状态$s$，
+			选取令$Q\left(s,a\right)$最大的$a$，不再随机
+			\begin{itemize}
+				\item 属于“策略分布不相关”(off-policy)学习算法
+			\end{itemize}\pause
+			\item 可以用神经网络
+			$Q^*\left(s,a;\theta\right)$
+			去逼近$Q$，以适应状态和行动规模较大的问题
+			\begin{itemize}
+				\item 训练：最小化
+				$r+\gamma\max_{a'}Q^*\left(s',a';\theta_i\right)$
+				与
+				$Q^*\left(s,a;\theta_{i+1}\right)$的误差平方
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{SARSA\only<10>{-Network}}
+		\begin{itemize}
+			\item $
+			Q_{i+1}\left(s,a\right)=
+			\alpha\left[
+			r+\gamma\only<1>{\alert<1>{\max_{a'}}}
+			Q_i\left(s',a'\right)
+			\right]+
+			\left(1-\alpha\right)Q_i\left(s',a'\right)
+			$\pause\pause
+			\item 随机选取一个初始状态$s_0\in S$\pause
+			\item\alert<4>{按某一分布选取合适的初始行动$a_0\in A$}
+			\begin{itemize}
+				\item 一般按$\epsilon$-贪心($\epsilon$-greedy)分布，
+				Softmax等
+			\end{itemize}\pause
+			\item 观察下一状态$s'$和收益$r$\pause
+			\item\alert<6>{在状态$s'$下按同样分布选取合适的行动$a'$}\pause
+			\item 更新$Q$，\alert<7>{并令$s\gets s',a\gets a'$}\pause
+			\item 如是重复，直至收敛\pause
+			\item 应用：对每一当前状态$s$，
+			\alert<9>{按同样分布选取合适的行动$a$}，
+			而非选取使$Q$最大的$a$
+			\begin{itemize}
+				\item 属于“策略分布相关”(on-policy)学习算法
+			\end{itemize}\pause
+			\item 也可以用神经网络去逼近$Q$，以解决规模较大的问题
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Deep Q-Learning: Playing Atari with RL}
+		\begin{itemize}
+			\item 游戏进程特别长(至少数千帧，甚至不会结束)
+			\begin{itemize}
+				\item 样本前后依赖关系较强
+				\item 在线学习时，距离当前时间较近的历史样本作用较大
+			\end{itemize}\pause
+			\item 在Q-Network的基础上加入\alert{经验池}(experience pool)
+			\pause
+			\item 每转移一次状态，算法将转移事实$(s_t,a_t,r_t,s_{t+1})$
+			加入经验池中
+			\begin{itemize}
+				\item 状态$s_t$为最近数帧图像的叠加
+			\end{itemize}\pause
+			\item 算法从经验池中随机抽样调整权重
+			\begin{itemize}
+				\item 有效利用距离当前相对久远的样本，打破依赖关系
+				\item 允许使用SGD调整权重
+			\end{itemize}\pause
+			\item “记忆”并非存在于网络的某一组件中(如RNN、LSTM)，
+			而是被整合在网络权重中\pause
+			\item 算法采用CNN作为函数逼近\pause
+			\item 拿“深度学习”的架构去做“强化学习”的事
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Deep Q-Learning的开源实现}
+		\begin{itemize}
+			\item Kristjan Korjus: Replicating DeepMind
+			\item Andrej Karpathy: ConvNetJS，在一个简化场景下\pause
+			\begin{itemize}
+				\item 训练一个agent，在一个有障碍物(墙壁)的地图中寻找苹果、
+				并回避毒蘑菇
+				\item 输入并非图像的叠加，而是在某个视角内有9个传感器，
+				以此作为原始的输入并进行叠加
+				\item 决策有前进，小左转，大左转，小右转，大右转五种
+				\item 前进距离固定(适当小)，可能的朝向只有24个
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{决策方式众多的情况}
+		\begin{itemize}
+			\item 以上各个方法的局限：决策数不能太多\pause
+			\item 决策数如果很多(或者决策空间连续)，构造网络就比较困难\pause
+			\begin{itemize}
+				\item 选定一个位置\pause
+				\begin{itemize}
+					\item 在一个稍大的网格中选取位置就已经相当困难
+					\item DeepMind(Jun. 2014)提到多于25个离散位置的选择
+					策略学习起来较为困难
+				\end{itemize}\pause
+				\item 确定发射角度、力度等\pause
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{REINFORCE}
+		\begin{itemize}
+			\item Williams(1992)概括了一类称为REINFORCE的算法
+			\item 适用于游戏环境内部状态转移与当前采取行动无关的情况
+			\pause
+			\begin{itemize}
+				\item 例子：物体跟踪
+				\item 此时，只需考虑当前时刻的收益
+				(立即收益，immediate reward)
+				\item 单纯地累加所有时刻的最大立即收益即得到最大总收益\pause
+				\item 状态转移与玩家采取行动有关的情况下，
+				只考虑立即收益的贪心思想应该也是近似地求最优解的一个方法
+				\begin{itemize}
+					\item MNIST，包括被污染的情况(Cluttered MNIST)
+					(DeepMind, Jun. 2014)
+					\item 接球游戏(DeepMind, Jun. 2014)
+					\item 门牌号识别(DeepMind, Dec. 2014)
+				\end{itemize}
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{REINFORCE}
+		\begin{itemize}
+			\item$
+			\only<1>{\text{REward Increment}}
+			\only<2->{\Delta w_{ij}}
+			=
+			\only<1-2>{\text{Non-negative Factor}}
+			\only<3->{\alpha_{ij}}
+			\times
+			\only<1-3>{\text{Offset Reinforcement}}
+			\only<4->{\left(r-b_{ij}\right)}
+			\times
+			\only<1-4>{\text{Characteristic Eligibility}}
+			\only<5->{\dfrac{\partial\ln g_i}{\partial w_{ij}}}
+			$\pause
+			\item $w$：权重\pause
+			\item $\alpha$：学习率\pause
+			\item $r$：当前收益
+			\item $b$：基线，理论上可任取，但收敛效果差异很大，
+			有时可能影响最终结果\pause
+			\item $g$：不同决策取值的概率密度函数\pause
+			\item Williams证明了：上式得出的权重变化的期望
+			$\mathbf{E}\left(\Delta w\vert w\right)$，
+			与收益期望关于权重的梯度
+			$\nabla_w\mathbf{E}\left(r\vert w\right)$的内积非负
+			\begin{itemize}
+				\item 特别地，若$\alpha$恒为一常数，则
+				$\mathbf{E}\left(\Delta w\vert w\right)=
+				\alpha\nabla_w\mathbf{E}\left(r\vert w\right)$
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{循环注意力模型(Recurrent Attention Model)}
+		\begin{itemize}
+			\item 解决MNIST分类和接球问题\pause
+			\item 可见状态：视野传感器(glimpse sensor)以选取点为中心，
+			由内而外提取各个层次各个清晰度的图像
+			\only<2>{
+			\begin{itemize}
+				\item 视野(glimpse)大小由内而外倍增，越外层越模糊
+				\item 模拟人类的视觉
+			\end{itemize}}\pause
+			\item 决策：选择下一个视野中心，以及其它与问题相关的具体决策
+			\only<3>{
+			\begin{itemize}
+				\item MNIST分类：决定所属的数字
+				\item 接球：移动接球板，有左移、右移和不动三种
+			\end{itemize}}\pause
+			\item 收益：0-1标记，成功为1，失败为0
+			\only<4>{
+			\begin{itemize}
+				\item MNIST分类：分类正确为1，分类失败为0
+				\item 接球：成功接住为1，漏球为0
+				\item 收益非常稀疏，不到最后不出结果
+			\end{itemize}}\pause
+			\item 内部状态转移：受决策影响有限
+			\only<5>{
+			\begin{itemize}
+				\item MNIST：内部状态为整张静止图片，恒等转移
+				\item 接球游戏：内部状态为球和板的位置，由于收益稀疏，可以考虑
+				用立即收益的叠加来近似求解
+			\end{itemize}}\pause
+			\item 问题转化成POMDP
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{RAM的架构}
+		\begin{figure}
+			\centering
+			\includegraphics[scale=0.3]{network.png}
+		\end{figure}
+		\begin{itemize}
+			\only<1>{
+			\item 各层次视野与当前选取中心点一同作为输入，输入到一个RNN中
+			\begin{itemize}
+				\item 在真正被RNN接收前，
+				各视野的组合首先被Linear-rectifier变换成一个高维向量，
+				随后与由中心位置经变换得到的高维向量连接，作为整体再经过
+				一层全连接的Linear-rectifier处理，得到最终传递给RNN的输入
+				\item MNIST分类采用了RNN，接球游戏中采用了LSTM
+			\end{itemize}}\pause
+			\only<2>{
+			\item RNN处理输入得到输出}\pause
+			\only<3>{
+			\item 输出被分别传递到位置输出网络和决策输出网络中
+			\begin{itemize}
+				\item 位置网络为一普通的线性变换
+				\item 决策网络是一个单层Linear-softmax网络
+			\end{itemize}}\pause
+			\only<4>{
+			\item 以输出的位置为均值，给定方差，作一二元正态分布，
+			并按此分布取位置作为下一时刻的视野中心
+			\begin{itemize}
+				\item 方差太小会导致agent无法有效探索更远的位置，从而
+				不能利用在外层角落里的信息；方差太大会降低学习效率
+			\end{itemize}}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{RAM的训练}
+		\begin{itemize}
+			\item 目标：最大化收益期望\pause
+			\item 采用REINFORCE算法
+			\begin{itemize}
+				\item $
+				\Delta\theta=\alpha\sum_{t=1}^T\lbrace
+				\left(R_t-b_t\right)
+				\left[\nabla_{\theta}\ln g\left(a_t,l_t\vert
+				s_{1:t};\theta
+				\right)\right]\rbrace$
+				\item $R_t$为至$t$时刻的总收益
+				\item $b_t$为基线，仅和RNN的内部状态有关，与实际的行动
+				$a_t,l_t$无关
+			\end{itemize}\pause
+			\item 针对问题
+			\begin{itemize}
+				\item 分类：对每一张图提取固定个数的视野，随后分类，得到收益
+				\item 接球：每一时刻提取一个视野，直至成功接球或漏球
+				\begin{itemize}
+					\item 游戏时间比分类要长得多，故采用记忆时间较长的LSTM
+				\end{itemize}
+				\item 门牌号识别：采用能检测多个对象的Deep RAM
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Tracking as a game}
+		\begin{itemize}
+			\item 用RAM模型单纯做对球(单个像素点)的追踪\pause
+			\item 游戏环境：$24\times 24$纯黑背景，
+			单个白点作为要追踪的对象\pause
+			\item 球的运动：自上而下，到最下一行时结束
+			\begin{itemize}
+				\item 匀速直线运动，碰到垂直墙壁反弹
+				\item 一定限制下的变速运动，除碰到垂直墙壁反弹之外：
+				\begin{itemize}
+					\item 水平方向上的速度每一时刻变化
+					-0.5\textasciitilde0.5 pixels per frame，
+					\item 垂直方向上速度每一时刻变化
+					0\textasciitilde0.2 pixels per frame
+				\end{itemize}
+				\item 静止不动，此时球的出现位置随机。仅用在测试中
+			\end{itemize}\pause
+			\item Agent训练：
+			$6\times 6,12\times 12,24\times 24$三层视野
+			\begin{itemize}
+				\item RAM + REINFORCE，如果最内层视野中有球，收益为1，
+				否则为0
+				\item RAM + REINFORCE + 经验池，将历史游戏记录
+				保存在经验池中然后做SGD，对学习效果影响不大
+				\item LSTM，网络结构同RAM，但不用REINFORCE训练，而是
+				直接以视野中心与球的平均距离作为误差函数进行权重调整
+			\end{itemize}\pause
+			\item 交叉测试：
+			把在某一环境中训练得到的网络应用在另外的环境中
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Tracking as a game}
+		\begin{figure}
+			\centering
+			\begin{tabular}{|c|c|c|c|}
+				\hline & 匀速 & 变速 & 静止 \\ 
+				\hline LSTM-匀速 & 92.22\% & 83.14\% & 50.3\% \\ 
+				\hline LSTM-变速 & 86.73\% & 84.87\% & 46.8\% \\ 
+				\hline RAM-匀速 & 72.10\% & 44.66\% & 71.0\% \\ 
+				\hline RAM-变速 & 41.68\% & 61.04\% & 56.8\% \\ 
+				\hline 
+			\end{tabular}
+		\end{figure}
+		\begin{itemize}
+			\item LSTM + Distance训练样本个数为5000
+			\item RAM + REINFORCE训练样本个数60000，方差0.07
+			\item 测试样本数1000
+			\item 匀速和变速环境中的指标为成功追踪率=成功追踪帧数\textdiv 总帧数
+			\item 静止环境中的指标为检测率=至少一帧追踪成功的样本数\textdiv 总样本数。
+			样本数量1000，测试时长50帧。
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Tracking as a game}
+		\begin{itemize}
+			\item 总体而言，RAM + REINFORCE在单纯追踪中的学习效率和成功率不如
+			LSTM + Distance。
+			\begin{itemize}
+				\item RAM + REINFORCE在静态环境中交叉测试表现意外地比
+				LSTM + Distance效果要好一些
+			\end{itemize}\pause
+			\item 强化学习可能的优势：Tracking, action一步到位？普适性更强？
+			\pause
+			\item 进一步的计划：
+			\begin{itemize}
+				\item 更多环境设置(从不同方向出现，同时训练不同轨迹，
+				加入障碍物等)\pause
+				\item 加入背景(引入CNN?)\pause
+				\item 更改被追踪的对象形式(刚体，周期变化的对象(?)等)\pause
+				\item 让agent自行模拟匀速运动的球
+				\begin{itemize}
+					\item 是否能记住墙的位置
+				\end{itemize}
+				\item 多个对象的追踪(DRAM)
+				\begin{itemize}
+					\item 如何对照
+				\end{itemize}\pause
+				\item 再现DeepMind的接球游戏
+				\begin{itemize}
+					\item 如何对照
+				\end{itemize}
+			\end{itemize}
+		\end{itemize}
+	\end{frame}
+	
+	\begin{frame}
+		\frametitle{Discussion}
+	\end{frame}
+\end{document}
