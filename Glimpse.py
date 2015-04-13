@@ -16,7 +16,7 @@ def fetch(m, x1, y1, x2, y2):
     if width != height:
         raise ValueError("Result matrix should be a square matrix")
 
-    result = NP.zeros((width, height))
+    result = NP.zeros((width, height)) + 255
     
     left_m = max(x1, 0)
     top_m = max(y1, 0)

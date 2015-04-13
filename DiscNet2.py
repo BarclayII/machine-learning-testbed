@@ -41,19 +41,26 @@ def rectify(x):
 def get_reference(shared):
     return shared.get_value(borrow=True, return_internal_type=True)
 
-def location_normalize(loc, size):
-    # normalize location to (-1, 1)
-    return loc / size * 2 - 1
-
-def location_restore(loc, size):
+def location_restore(sig, width, dims):
     # restore location from (-1, 1) to original coordinates
-    return (loc + 1) / 2 * size
+    loc = NP.zeros((dims,))
+    for i in range(0, dims):
+        loc[i] = NP.argmax(sig[i * width:(i+1) * width])
+    return loc
 
 def bsl(loc, time):
     return 0.8 * time
 
 def empty_func(*args, **opts):
     pass
+
+def location_expand(loc, width, dims):
+    vec = NP.zeros((width * dims,))
+    for i in range(0, dims):
+        if loc[i] >= 0 and loc[i] < width:
+            vec[int(loc[i]) + i * width] = 1
+    return vec
+
 
 
 class DynNet:
@@ -98,11 +105,11 @@ class DynNet:
 
 
     # Add parameters for LSTM units
-    def _add_LSTM(self):
+    def _add_LSTM(self, index=1):
         for gate_type in _LSTM_tags:
-            self._add_weights("LSTM_" + gate_type, self.opts["internal_dims"], self.opts["internal_dims"])
-            self._add_weights("LSTM_" + gate_type, self.opts["gn_secnd_dims"], self.opts["internal_dims"], prefix="U_")
-            self._add_biases("LSTM_" + gate_type, self.opts["internal_dims"])
+            self._add_weights("LSTM%d_" % index + gate_type, self.opts["internal_dims"], self.opts["internal_dims"])
+            self._add_weights("LSTM%d_" % index + gate_type, self.opts["gn_secnd_dims"], self.opts["internal_dims"], prefix="U_")
+            self._add_biases("LSTM%d_" % index + gate_type, self.opts["internal_dims"])
 
 
 
@@ -110,8 +117,10 @@ class DynNet:
         self.opts = {
         "location_dims" :   2,              # (FIXED) location dimension
         "glimpse_count" :   3,              # (FIXED) number of glimpses taken
-        "glimpse_width" :   6,              # (FIXED) width of the smallest or inner-most glimpse
-        "gn_first_dims" :   128,            # (MAYBE FIXED) dimension of each part of first layer in the glimpse network (=128)
+        "glimpse_width" :   6,             # (FIXED) width of the smallest or inner-most glimpse
+        "environ_width" :   24,            # (FIXED) environment width
+        "historylength" :   3,              # history length
+        "gn_first_dims" :   256,            # (MAYBE FIXED) dimension of each part of first layer in the glimpse network (=128)
         "gn_secnd_dims" :   256,            # (MAYBE FIXED) dimension of second layer in the glimpse network (=256)
         "internal_dims" :   256,            # (MAYBE FIXED) dimension of internal state, i.e. number of LSTM units (=256)
         "lstm_out_dims" :   256,            # (MAYBE FIXED) dimension of LSTM output (=256)
@@ -128,12 +137,12 @@ class DynNet:
         "exp_pool_size" :   50000,          # size of experience pool.
         "batch_replace" :   None,           # (NOT USED) Replace algorithm, returns index of sample to be replaced
         "additional_fc" :   False,          # Additional fully-connected layers before and after LSTM core, not sure whether it should be added.
-        "add_fc_squash" :   NN.sigmoid,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
-        "learningmodel" :   "reinforce_sum",# Learning model.
+        "add_fc_squash" :   NN.softmax,     # Squasher function for additional fully-connected layer, no effect if additional_fc is False
+        "learningmodel" :   "supervised",   # Learning model.
                                             # 'supervised' -> Supervised model.
                                             # 'reinforce_sum' -> REINFORCE model with costs summed rather than averaged.
         "reinforce_bsl" :   bsl,            # (NOT USED) Baseline function, takes output location and time, returns expectation
-        "output_squash" :   identity,       # Location output squasher function
+        "output_squash" :   NN.softmax,     # Location output squasher function
         "save_file_fmt" :   'pickle',       # Parameter save file format, currently only cPickle is supported
         "save_filename" :   'DynNet.pickle',# Save file name
         "load_filename" :   None,           # Load file name.  The trainer loads network from this file if this option is not None.
@@ -163,11 +172,10 @@ class DynNet:
 
         # Glimpse network consists of two linear-rectifiers.
         # First linear-rectifier consists of two parts, each processing glimpses and location.
-        self._add_fc("glm_in", glm_inputs, self.opts["gn_first_dims"])
-        self._add_fc("loc_in", self.opts["location_dims"], self.opts["gn_first_dims"])
+        self._add_fc("loc_in", self.opts["environ_width"] * self.opts["location_dims"] * self.opts["historylength"], self.opts["gn_first_dims"])
 
         # Second linear-rectifier combines both outputs and transforms the combination.
-        self._add_fc("glm_out", 2*self.opts["gn_first_dims"], self.opts["gn_secnd_dims"])
+        self._add_fc("glm_out", self.opts["gn_first_dims"], self.opts["gn_secnd_dims"])
 
         ### Core Network ###
 
@@ -176,7 +184,8 @@ class DynNet:
             self._add_fc("trans_in", self.opts["gn_secnd_dims"], self.opts["internal_dims"])
 
         # Core network is basically an LSTM layer.
-        self._add_LSTM()
+        self._add_LSTM(1)
+        self._add_LSTM(2)
 
         # The fully-connected layer to translate output from core network into location network.
         if self.opts["additional_fc"]:
@@ -185,7 +194,7 @@ class DynNet:
         ### Location/Action Network ###
 
         # The output from LSTM layer is then transferred into a location network, and an additional action network.
-        self._add_fc("loc_out", self.opts["lstm_out_dims"], self.opts["location_dims"])
+        self._add_fc("loc_out", self.opts["lstm_out_dims"], self.opts["location_dims"] * self.opts["environ_width"])
         # Currently only glimpse location is considered, and no other action was taken.  Hence the actions_count must be 0.
         if self.opts["actions_count"] > 0:
             raise AttributeError("option actions_count must be 0")
@@ -203,10 +212,12 @@ class DynNet:
                 print 'Error opening file %s, ignoring...' % self.opts["load_filename"]
 
         print 'Initialization complete.'
+        for param in self._params.values():
+            print param.get_value()
 
 
 
-    def step_lstm(self, location, glimpses, prev_candt, prev_outpt):
+    def step_lstm(self, location, glimpses, prev_candt1, prev_outpt1, prev_candt2, prev_outpt2):
         """
         Symbolic representation of LSTM step function.
 
@@ -229,12 +240,12 @@ class DynNet:
         ### Glimpse Network ###
         # We flatten both inputs, passing the results into the first linear-rectifier.
         loc_input   = location
-        glm_input   = glimpses
+        #glm_input   = glimpses
         loc_trans   = rectify(TT.dot(self.W_loc_in, loc_input) + self.B_loc_in)
-        glm_trans   = rectify(TT.dot(self.W_glm_in, glm_input) + self.B_glm_in)
+        #glm_trans   = rectify(TT.dot(self.W_glm_in, glm_input) + self.B_glm_in)
 
         # Both outputs are then combined and processed by the second linear-rectifier.
-        glm_immdt   = TT.concatenate([loc_trans, glm_trans])
+        glm_immdt   = loc_trans#TT.concatenate([loc_trans, glm_trans])
         glm_out     = rectify(TT.dot(self.W_glm_out, glm_immdt) + self.B_glm_out)
 
         ### Core Network ###
@@ -246,56 +257,77 @@ class DynNet:
         
         # The core network input is then processed together with the previous candidate state.
         # Calculate activation of each gate first.
-        candt_act   = TT.tanh   (   TT.dot(self.W_LSTM_candt, core_in)
-                                  + TT.dot(self.U_LSTM_candt, prev_outpt)
-                                  + self.B_LSTM_candt)
-        input_act   = NN.sigmoid(   TT.dot(self.W_LSTM_input, core_in)
-                                  + TT.dot(self.U_LSTM_input, prev_outpt)
-                                  + self.B_LSTM_input)
-        frget_act   = NN.sigmoid(   TT.dot(self.W_LSTM_frget, core_in)
-                                  + TT.dot(self.U_LSTM_frget, prev_outpt)
-                                  + self.B_LSTM_frget)
-        outpt_act   = NN.sigmoid(   TT.dot(self.W_LSTM_outpt, core_in)
-                                  + TT.dot(self.U_LSTM_outpt, prev_outpt)
-                                  + self.B_LSTM_outpt)
+        candt_act1  = TT.tanh   (   TT.dot(self.W_LSTM1_candt, core_in)
+                                  + TT.dot(self.U_LSTM1_candt, prev_outpt1)
+                                  + self.B_LSTM1_candt)
+        input_act1  = NN.sigmoid(   TT.dot(self.W_LSTM1_input, core_in)
+                                  + TT.dot(self.U_LSTM1_input, prev_outpt1)
+                                  + self.B_LSTM1_input)
+        frget_act1  = NN.sigmoid(   TT.dot(self.W_LSTM1_frget, core_in)
+                                  + TT.dot(self.U_LSTM1_frget, prev_outpt1)
+                                  + self.B_LSTM1_frget)
+        outpt_act1  = NN.sigmoid(   TT.dot(self.W_LSTM1_outpt, core_in)
+                                  + TT.dot(self.U_LSTM1_outpt, prev_outpt1)
+                                  + self.B_LSTM1_outpt)
         # Cell output (or next candidate value) is obtained from adding gated input and forgotten memory together.
-        gated_input = input_act * candt_act
-        forgot_mem  = frget_act * prev_candt
-        next_candt  = gated_input + forgot_mem
+        gated_input1= input_act1 * candt_act1
+        forgot_mem1 = frget_act1 * prev_candt1
+        next_candt1 = gated_input1 + forgot_mem1
         # Gating squashed result returns the LSTM output
-        core_out    = outpt_act * TT.tanh(next_candt)
+        core_out1    = outpt_act1 * TT.tanh(next_candt1)
+        candt_act2  = TT.tanh   (   TT.dot(self.W_LSTM2_candt, core_out1)
+                                  + TT.dot(self.U_LSTM2_candt, prev_outpt2)
+                                  + self.B_LSTM2_candt)
+        input_act2  = NN.sigmoid(   TT.dot(self.W_LSTM2_input, core_out1)
+                                  + TT.dot(self.U_LSTM2_input, prev_outpt2)
+                                  + self.B_LSTM2_input)
+        frget_act2  = NN.sigmoid(   TT.dot(self.W_LSTM2_frget, core_out1)
+                                  + TT.dot(self.U_LSTM2_frget, prev_outpt2)
+                                  + self.B_LSTM2_frget)
+        outpt_act2  = NN.sigmoid(   TT.dot(self.W_LSTM2_outpt, core_out1)
+                                  + TT.dot(self.U_LSTM2_outpt, prev_outpt2)
+                                  + self.B_LSTM2_outpt)
+        # Cell output (or next candidate value) is obtained from adding gated input and forgotten memory together.
+        gated_input2= input_act2 * candt_act2
+        forgot_mem2 = frget_act2 * prev_candt2
+        next_candt2 = gated_input2 + forgot_mem2
+        # Gating squashed result returns the LSTM output
+        core_out2    = outpt_act2 * TT.tanh(next_candt2)
 
         # Core output is then transformed by a fully-connected layer to the location network
         if self.opts["additional_fc"]:
-            loc_in  = self.opts["add_fc_squash"](TT.dot(self.W_trans_out, core_out) + self.B_trans_out)
+            loc_in  = self.opts["add_fc_squash"](TT.dot(self.W_trans_out, core_out2) + self.B_trans_out)
         else:
-            loc_in  = core_out
+            loc_in  = core_out2
 
         ### Location network ###
         # No squashing is applied to the location network output.
         # Only a simple linear transformation is done.
-        loc_out     = self.opts["output_squash"](TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
+        loc_out     = (TT.dot(self.W_loc_out, loc_in) + self.B_loc_out)
+        loc_split   = TT.concatenate((NN.softmax(loc_out[0:self.opts["environ_width"]]),
+                                      NN.softmax(loc_out[self.opts["environ_width"]:self.opts["environ_width"]*2]))).flatten()
 
-        return loc_out, next_candt, core_out
+        return loc_split, next_candt1, core_out1, next_candt2, core_out2
 
 
 
-    def step_supervised(self, location, glimpses, real_location, prev_candt, prev_outpt):
+    def step_supervised(self, location, glimpses, real_location, prev_candt1, prev_outpt1, prev_candt2, prev_outpt2):
         """
         Cost function for LSTM in supervised model.
         """
-        loc_out, next_candt, core_out = self.step_lstm(location, glimpses, prev_candt, prev_outpt)
+        ans = self.step_lstm(location, glimpses, prev_candt1, prev_outpt1, prev_candt2, prev_outpt2)
+        loc_out = ans[0]
         loc_diff = loc_out - real_location
         cost = TT.dot(loc_diff, loc_diff)
-        return loc_out, next_candt, core_out, cost
+        return ans + (cost,)
 
 
 
-    def step_reinforce(self, location, glimpses, step_num, chosen_loc, reward, prev_candt, prev_outpt):
+    def step_reinforce(self, location, glimpses, step_num, chosen_loc, reward, prev_candt1, prev_outpt1, prev_candt2, prev_outpt2):
         """
         Cost function for LSTM in REINFORCE model.
         """
-        loc_out, next_candt, core_out = self.step_lstm(location, glimpses, prev_candt, prev_outpt)
+        loc_out, next_candt, core_out = self.step_lstm(location, glimpses, prev_candt1, prev_outpt1, prev_candt2, prev_outpt2)
         loc_diff = chosen_loc - loc_out
         # Log-probability density function for independent bivariate normal distribution, with coefficients discarded.
         # It is essentially the distance between chosen location and mean location...
@@ -366,18 +398,24 @@ class DynNet:
         print 'Setting up step functions...'
         sym_loc_in = TT.vector('loc_in')
         sym_glm_in = TT.vector('glm_in')
-        sym_prev_candt = TT.vector('prev_candt')
-        sym_prev_outpt = TT.vector('prev_outpt')
-        sym_loc_out, sym_next_candt, sym_next_outpt = self.step_lstm(sym_loc_in, sym_glm_in, sym_prev_candt, sym_prev_outpt)
-        self.step_func = T.function([sym_loc_in, sym_glm_in, sym_prev_candt, sym_prev_outpt], [sym_loc_out, sym_next_candt, sym_next_outpt])
+        sym_prev_candt1 = TT.vector('prev_candt1')
+        sym_prev_outpt1 = TT.vector('prev_outpt1')
+        sym_prev_candt2 = TT.vector('prev_candt2')
+        sym_prev_outpt2 = TT.vector('prev_outpt2')
+        sym_loc_out, sym_next_candt1, sym_next_outpt1, sym_next_candt2, sym_next_outpt2 = self.step_lstm(
+                sym_loc_in, sym_glm_in, sym_prev_candt1, sym_prev_outpt1, sym_prev_candt2, sym_prev_outpt2)
+        self.step_func = T.function([sym_loc_in, sym_glm_in, sym_prev_candt1, sym_prev_outpt1, sym_prev_candt2, sym_prev_outpt2],
+                [sym_loc_out, sym_next_candt1, sym_next_outpt1, sym_next_candt2, sym_next_outpt2], on_unused_input='ignore')
         
         # Calculate mean cost for all steps.
         # Suppose we have a list of inputs here, represented as symbols...
         print 'Setting up cost function...'
         sym_loc_in_list = TT.matrix('loc_in_l')
         sym_glm_in_list = TT.matrix('glm_in_l')
-        sym_candt_list = TT.matrix('candt_l')
-        sym_outpt_list = TT.matrix('outpt_l')
+        sym_candt1_list = TT.matrix('candt1_l')
+        sym_outpt1_list = TT.matrix('outpt1_l')
+        sym_candt2_list = TT.matrix('candt2_l')
+        sym_outpt2_list = TT.matrix('outpt2_l')
         if self.opts["learningmodel"] == 'supervised':
             sym_real_loc_list = TT.matrix('real_loc_l')
             # I have to admit that theano.scan() function is quite obscure.
@@ -388,8 +426,9 @@ class DynNet:
             # So it's relatively easy to write RNNs using theano.scan(), but learning how to use it is quite difficult.
             step_scan, _ = T.scan(fn=self.step_supervised,
                                   sequences=[sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
-                                  outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
-            sym_cost = step_scan[3].mean()
+                                  outputs_info=[None, TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)),
+                                                TT.zeros((self.opts["internal_dims"],)), TT.zeros((self.opts["lstm_out_dims"],)), None])
+            sym_cost = step_scan[-1].mean()
         else:
             sym_steps = TT.iscalar('steps')
             sym_step_num_list = TT.arange(sym_steps)
@@ -424,7 +463,7 @@ class DynNet:
         # Create learning functions for adjusting weights.
         if self.opts["learningmodel"] == 'supervised':
             self.learn_func = T.function([sym_loc_in_list, sym_glm_in_list, sym_real_loc_list],
-                                         step_scan,
+                                         sym_cost,
                                          updates=updates,
                                          on_unused_input='ignore')
         else:
@@ -462,6 +501,7 @@ class DynNet:
             effective_gamenum = 0
             rect_width = [self.opts["glimpse_width"] * i for i in (1, 2, 4)]
             ecolor = ["red", "green", "blue"]
+            dist = {}
             for gamenum in xrange(0, self.opts["training_size"]):
                 # OK, here's how I intend to do it:
                 # Each time we train the network, we let the agent play an entire game, recording the choices and feedbacks into a sequence.
@@ -471,54 +511,48 @@ class DynNet:
                 env.start()
 
                 # Initialize training sequences
-                loc_in = [NP.zeros((self.opts["location_dims"],))]
-                orig_glm_in = [NP.zeros((self.opts["glimpse_width"], self.opts["glimpse_width"], self.opts["glimpse_count"]))]
+                locs = [NP.zeros((self.opts["environ_width"] * self.opts["location_dims"])) for i in range(1, self.opts["historylength"])]
+                loc_in = []
+                #orig_glm_in = [NP.zeros((self.opts["glimpse_width"], self.opts["glimpse_width"], self.opts["glimpse_count"]))]
                 glm_in = [NP.zeros((self.opts["glimpse_width"] * self.opts["glimpse_width"] * self.opts["glimpse_count"]))]
-                loc_out = [NP.zeros((self.opts["location_dims"],))]
-                core_out = [NP.zeros((self.opts["lstm_out_dims"],))]
-                candt = [NP.zeros((self.opts["internal_dims"],))]
-                real_out = [location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())]
+                loc_out = [NP.zeros((self.opts["environ_width"] * self.opts["location_dims"])) for i in range(1, self.opts["historylength"])]
+                core_out1 = [NP.zeros((self.opts["lstm_out_dims"],))]
+                candt1 = [NP.zeros((self.opts["internal_dims"],))]
+                core_out2 = [NP.zeros((self.opts["lstm_out_dims"],))]
+                candt2 = [NP.zeros((self.opts["internal_dims"],))]
+                real_out = [location_expand(NP.array([env._ball.posX, env._ball.posY]), env.size(), self.opts["location_dims"])]
                 reward = [0.]
-                chosen_loc = [NP.asarray((env._ball.posX, env._ball.posY))]
+                chosen_loc = [location_expand(NP.asarray((env._ball.posX, env._ball.posY)), env.size(), self.opts["location_dims"])]
                 img_ca = []
                 img_env = []
                 img_glm = []
                 cost = [0.]
                 time = 0
                 rwd = 0
-                if self.opts["learning_mode"] == 'test':
-                    fig_ca = PL.figure(1)
-                    fig_env = PL.figure(2)
-                    fig_glm = PL.figure(3)
-                    glm_ax = [fig_glm.add_subplot(3, 1, i) for i in [1, 2, 3]]
+                fig_ca = PL.figure(1)
+                fig_env = PL.figure(2)
+                fig_glm = PL.figure(3)
+                glm_ax = [fig_glm.add_subplot(3, 1, i) for i in [1, 2, 3]]
 
                 # Randomly choose a starting point
-                loc_in.append(real_out[-1])
+                locs.append(real_out[-1])
+                loc_in.append(NP.concatenate([locs[-i] for i in range(1, self.opts["historylength"]+1)]))
                 # print env.done(), env._ball.posX, env._ball.posY
 
                 # Keep tracking (randomly?) until the ball leaves the screen
                 while not env.done():
                     # Fetch glimpses
-                    glm = glimpse(env.M, self.opts["glimpse_width"], location_restore(loc_in[-1], env.size()))
-                    orig_glm_in.append(glm)
-                    glm_in.append(NP.asarray(orig_glm_in[-1]).flatten())
+                    #glm = glimpse(env.M, self.opts["glimpse_width"], location_restore(locs[-1], env.size(), self.opts["location_dims"]))
+                    #orig_glm_in.append(glm)
+                    glm_in.append(NP.asarray(glm_in[-1]).flatten())
                     # Pass the glimpses, location, along with previous LSTM states into the step function ONCE.
-                    lo, ca, co = self.step_func(loc_in[-1], glm_in[-1], candt[-1], core_out[-1])
+                    lo, ca1, co1, ca2, co2 = self.step_func(loc_in[-1], glm_in[-1], candt1[-1], core_out1[-1], candt2[-1], core_out2[-1])
                     # Record the states and choice.
-                    candt.append(ca)
-                    core_out.append(co)
+                    candt1.append(ca1)
+                    core_out1.append(co1)
+                    candt2.append(ca2)
+                    core_out2.append(co2)
                     loc_out.append(lo)
-
-                    if self.opts["learning_mode"] == 'test':
-                        # Build an image containing LSTM candidate vector, environment matrix, and the glimpses
-                        img_ca.append([fig_ca.gca().matshow(ca.reshape((16, 16)), cmap='gray')])
-                        rect_center = location_restore(NP.asarray([loc_in[-1][1], loc_in[-1][0]]), env.size())
-                        rect_left_bottom = [NP.round(rect_center - 0.5) + 0.5 - self.opts["glimpse_width"] * 0.5 * i for i in (1, 2, 4)]
-                        img_env.append([fig_env.gca().matshow(env.M, cmap='gray', vmin=0, vmax=255)] +
-                                       [fig_env.gca().add_patch(Rectangle(rect_left_bottom[i], rect_width[i], rect_width[i], ec=ecolor[i], fill=False, lw=2)) \
-                                               for i in (0, 1, 2)])
-                        img_glm.append([glm_ax[i].matshow(glm[i], cmap='gray', vmin=0, vmax=255) for i in (0, 1, 2)])
-            
 
                     # Step over
                     time += 1
@@ -531,11 +565,24 @@ class DynNet:
                         # No distribution is applied.
                         chosen_loc.append(lo)
                         # The locations stored by agent is zoomed to (-1, -1) ~ (1, 1).
-                        ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
-                        loc_in.append(ro)
+                        ro = location_expand(NP.array([env._ball.posX, env._ball.posY]), env.size(), self.opts["location_dims"])
+                        if self.opts["learning_mode"] == 'test':
+                            locs.append(ro if time < 10 else lo)
+                        else:
+                            locs.append(ro)
+                        loc_in.append(NP.concatenate([locs[-i] for i in range(1, self.opts["historylength"]+1)]))
                         real_out.append(ro)
-                        rwd = (1 if env.is_tracking(location_restore(lo, env.size()), 2) else 0)
+                        rwd = 1 if (ro == location_expand(location_restore(lo, env.size(), self.opts["location_dims"]), env.size(), self.opts["location_dims"])).all() \
+                                else 0
                         reward.append(rwd)
+                        if self.opts["learning_mode"] == 'test':
+                            # Build an image containing LSTM candidate vector, environment matrix, and the glimpses
+                            img_ca.append([fig_ca.gca().matshow(ca1.reshape((16, 16)), cmap='gray')])
+                            rect_center = location_restore(lo, env.size(), self.opts["location_dims"])
+                            real_center = location_restore(ro, env.size(), self.opts["location_dims"])
+                            img_env.append([fig_env.gca().matshow(env.M, cmap='gray', vmin=0, vmax=255)] +
+                                           [fig_env.gca().add_patch(Rectangle(rect_center-0.5, 1, 1, ec='red', fill=False, lw=2))] +
+                                           [fig_env.gca().add_patch(Rectangle(real_center-0.5, 1, 1, ec='white', fill=False, lw=2))])
                         #print '\ttime=', time
                         #print '\t\tloc_out =', loc_out[-1]
                         #print '\t\treal_out=', real_out[-1]
@@ -543,26 +590,27 @@ class DynNet:
                         # In reinforcement learning model, the location picked by agent follows an independent bivariate normal distribution.
                         cl = NP.random.multivariate_normal(lo, self.covariance.get_value())
                         chosen_loc.append(cl)
-                        loc_in.append(cl)
+                        locs.append(cl)
+                        loc_in.append(NP.concatenate([locs[-i] for i in range(1, self.opts["historylength"]+1)]))
                         rwd = (1 if env.is_tracking(location_restore(cl, env.size()), self.opts["glimpse_width"]) else 0)
                         reward.append(rwd)
-                        ro = location_normalize(NP.array([env._ball.posX, env._ball.posY]), env.size())
+                        ro = location_expand(NP.array([env._ball.posX, env._ball.posY]), env.size(), self.opts["location_dims"])
                         real_out.append(ro)
 
-                # Remove trailing loc_in element first.
-                loc_in.pop()
-
+                real_out.pop(0)
+                chosen_loc.pop(0)
+                reward.pop(0)
                 # Check cost and add history into experience pool.
                 if self.opts["learningmodel"] == 'supervised':
                     c = self.learn_func(loc_in, glm_in, real_out)
-                    print c
                     sum_rwd += sum(reward)
                     sum_step += time
                     mean_prob = float(sum_rwd) / sum_step
                     mean = (mean * gamenum + c) / (gamenum + 1)
-                    print '\x1b[0;31m' if mean_prob > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
-                            '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), 'Mean Prob: %.10f' % mean_prob, '\x1b[0;37m'
-                    prev_mean = mean_prob
+                    print '\x1b[0;31m' if mean > prev_mean else '\x1b[0;32m', 'Game #%d' % gamenum, '\tCost: %.10f' % c, '\tMean: %.10f' % mean, \
+                            '\tSteps: %d' % time, '\tProb: %.10f' % (sum(reward) / time), 'Mean Prob: %.10f' % mean_prob, \
+                            (('Learn Rate: %.10f' % self.sym_learn_rate.get_value()) if (self.opts["learning_mode"] != 'test') else ""), '\x1b[0;37m'
+                    prev_mean = mean
                 else:
                     c = self.learn_func(loc_in, glm_in, time + 1, chosen_loc, reward)
                     sum_rwd += sum(reward)
@@ -585,21 +633,36 @@ class DynNet:
                 # Replay experiences.
                 updater()
 
-                if (self.opts["learning_mode"] == 'test'):
+                if (self.opts["learning_mode"] == 'test') or (gamenum % 500 == 0):
+                    newdist = {}
                     if "bg" in env.__dict__:
                         print 'Environment'
                         print env.bg
+                    print 'Parameters:'
+                    for k in self._params:
+                        print k
+                        print self._params[k].get_value()
                     print 'Step #\t\tloc_out\t\t\t\tchosen_loc\t\t\treward\treal_out\t\t\t\tdistance\tchosen_dist'
-                    for t in range(0, time):
-                        loc_out_r = location_restore(loc_out[t], env.size())
-                        chosen_loc_r = location_restore(chosen_loc[t], env.size())
-                        real_out_r = location_restore(real_out[t], env.size())
+                    for t in range(0, time - 1):
+                        loc_out_r = location_restore(locs[t + self.opts["historylength"] - 1], env.size(), self.opts["location_dims"])
+                        chosen_loc_r = location_restore(chosen_loc[t], env.size(), self.opts["location_dims"])
+                        real_out_r = location_restore(real_out[t], env.size(), self.opts["location_dims"])
                         print t, '\t\t', loc_out_r, '\t', chosen_loc_r, '\t',\
                                 reward[t], '\t', real_out_r, '\t', \
                                 NP.sqrt(NP.dot(real_out_r - loc_out_r, real_out_r - loc_out_r)) if self.opts["learningmodel"] == 'supervised' \
                                 else NP.max(NP.abs(real_out_r - loc_out_r)), \
                                 '\t', NP.sqrt(NP.dot(chosen_loc_r - real_out_r, chosen_loc_r - real_out_r)) if self.opts["learningmodel"] == 'supervised' else \
                                 NP.max(NP.abs(real_out_r - chosen_loc_r))
+                        d = NP.dot(real_out_r - chosen_loc_r, real_out_r - chosen_loc_r)
+                        newdist[d] = newdist.get(d, 0) + 1
+                    if self.opts["learning_mode"] == 'test':
+                        print 'Errors:'
+                        for d in newdist:
+                            print (d, newdist[d])
+                            dist[d] = dist.get(d, 0) + newdist[d]
+                        print 'Total Errors:'
+                        for d in dist:
+                            print (d, dist[d])
                                 
                 # Decrease learning rate
                 if self.opts["learning_mode"] != 'test':
@@ -607,6 +670,7 @@ class DynNet:
                     self.covariance.set_value(self.opts["cov_decay_fun"](self.covariance.get_value()))
                 else:
                     # Plot the image
+                    img_env.pop()
                     ani_ca = animation.ArtistAnimation(fig_ca, img_ca, interval=500, blit=True, repeat_delay=2000)
                     ani_env = animation.ArtistAnimation(fig_env, img_env, interval=500, blit=True, repeat_delay=2000)
                     ani_glm = animation.ArtistAnimation(fig_glm, img_glm, interval=500, blit=True, repeat_delay=2000)
