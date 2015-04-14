@@ -149,9 +149,17 @@ class DynNet:
         "save_filename" :   'DynNet.pickle',# Save file name
         "load_filename" :   None,           # Load file name.  The trainer loads network from this file if this option is not None.
         "learning_mode" :   'online',       # "online" -> Online learning, "replay" -> Experience replay, "test" -> Test agent.
+        "rms_decayrate" :   0.95,           # Decay rate for RMSprop
+        "rms_mmt_ratio" :   0.9,            # Momentum for RMSprop
+        "rms_reg_value" :   1e-4,           # Regularizer for RMSprop
         }
         self._params = OrderedDict()
         self._deltas = OrderedDict()
+
+        # RMSprop related
+        self._f = OrderedDict()             # Accumulated linear gradient
+        self._g = OrderedDict()             # Accumulated squared gradient
+        self._v = OrderedDict()             # Accumulated decrement
 
         # Update options first
         for k in options:
@@ -394,6 +402,20 @@ class DynNet:
 
 
 
+    def online_rmsprop(self):
+        # This function really should be integrated into the learning function... But the whole code is quite messy anyway.
+        for param in self._params:
+            grad = self._deltas[self._params[param]].get_value()
+            self._f[param] = self.opts["rms_decayrate"] * self._f.get(param, 0) \
+                           + (1 - self.opts["rms_decayrate"]) * grad
+            self._g[param] = self.opts["rms_decayrate"] * self._g.get(param, 0) \
+                           + (1 - self.opts["rms_decayrate"]) * (grad ** 2)
+            self._v[param] = self.opts["rms_mmt_ratio"] * self._v.get(param, 0) \
+                           - self.sym_learn_rate.get_value() / NP.sqrt(self._g[param] - self._f[param] ** 2 + self.opts["rms_reg_value"]) * grad
+            self._params[param].set_value(self._params[param].get_value() + self._v[param])
+
+
+
     def setup(self, env):
         print "Current Environment:", env
 
@@ -488,7 +510,7 @@ class DynNet:
 
         # Determine update method according to learning mode
         if self.opts["learning_mode"] == 'online':
-            updater = self.online
+            updater = self.online_rmsprop
         elif self.opts["learning_mode"] == 'replay':
             updater = self.replay
         else:
@@ -532,10 +554,11 @@ class DynNet:
                 cost = [0.]
                 time = 0
                 rwd = 0
-                fig_ca = PL.figure(1)
-                fig_env = PL.figure(2)
-                fig_glm = PL.figure(3)
-                glm_ax = [fig_glm.add_subplot(3, 1, i) for i in [1, 2, 3]]
+                if self.opts["learning_mode"] == 'test':
+                    fig_ca = PL.figure(1)
+                    fig_env = PL.figure(2)
+                    fig_glm = PL.figure(3)
+                    glm_ax = [fig_glm.add_subplot(3, 1, i) for i in [1, 2, 3]]
 
                 # Randomly choose a starting point
                 locs.append(real_out[-1])
